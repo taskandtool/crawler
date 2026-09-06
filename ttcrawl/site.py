@@ -162,9 +162,9 @@ def run(args):
         html, rendered = None, False
         shot = os.path.join(out, "pages", slugify(url) + ".png") if args.screenshots else None
         if obscura:
-            html = browser.render_html(url, obscura, screenshot=shot)
+            html = browser.render_html(url, obscura)
             rendered = html is not None
-            if shot and os.path.isfile(shot):
+            if shot and browser.screenshot(url, obscura, shot) and os.path.isfile(shot):
                 rec["screenshot"] = os.path.relpath(shot, out)
         # One plain request for the status, the final URL, and the headers,
         # and the page itself when there is no browser.
