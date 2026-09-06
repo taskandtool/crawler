@@ -105,7 +105,14 @@ def run(args):
     os.makedirs(img_dir, exist_ok=True)
     if args.screenshots:
         os.makedirs(os.path.join(out, "pages"), exist_ok=True)
-    structured_dir = os.path.join(os.path.dirname(out.rstrip("/")) or ".", "structured") if args.structured_out is None else args.structured_out
+    # The harvest sits beside the owner's crawl (raw/web -> raw/structured);
+    # any other crawl keeps it inside its own folder.
+    if args.structured_out is not None:
+        structured_dir = args.structured_out
+    elif os.path.basename(out.rstrip("/")) == "web":
+        structured_dir = os.path.join(os.path.dirname(out.rstrip("/")) or ".", "structured")
+    else:
+        structured_dir = os.path.join(out, "_structured")
     os.makedirs(structured_dir, exist_ok=True)
 
     records = {start: inventory.new_record(start)}
@@ -382,7 +389,7 @@ def add_parser(sub):
     p = sub.add_parser("site", help="read a whole site into raw/web: pages, inventory, furniture, media, structured data")
     p.add_argument("start_url")
     p.add_argument("--out", default="raw/web")
-    p.add_argument("--structured-out", default=None, help="where the per-page JSON goes (default: raw/structured beside --out)")
+    p.add_argument("--structured-out", default=None, help="where the per-page JSON goes (default: raw/structured beside raw/web; <out>/_structured for any other crawl)")
     p.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES,
                    help=f"pages to read (default {DEFAULT_MAX_PAGES}; the summary says how many were found)")
     p.add_argument("--max-images", type=int, default=200)
