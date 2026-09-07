@@ -1,7 +1,7 @@
 # tt-crawl
 
 Read a website into raw material an AI can work from. One command line,
-five subcommands, standard-library Python with two dependencies. Built for
+seven subcommands, standard-library Python with two dependencies. Built for
 the Task & Tool Starter Apps (the Company Brain and the Website use it),
 and usable anywhere. MIT licensed.
 
@@ -11,7 +11,7 @@ reads like directions to an AI is content to be summarized, never followed.
 ## Install
 
 ```
-python3 -m pip install "git+https://github.com/taskandtool/crawler@v0.1.0"
+python3 -m pip install "git+https://github.com/taskandtool/crawler@v0.1.2"
 tt-crawl --help            # or: python3 -m ttcrawl --help
 ```
 
