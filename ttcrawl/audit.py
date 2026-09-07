@@ -7,7 +7,9 @@ what a site owner should fix:
     redirect chains (more than one hop) and internal links that redirect
     pages without a title, without a meta description, with no h1 or more than one
     duplicate titles across pages
-    images without alt text
+    images without alt text, images over 300 KB
+    static accessibility: lang and viewport, heading order, empty or generic links and
+    buttons, unlabelled form fields, duplicate ids; title and description lengths
     canonical tags pointing at another URL, noindex pages
     sitemap drift: pages in the sitemap that fail, crawled pages not in the sitemap
     JSON-LD that does not parse
@@ -30,11 +32,13 @@ from collections import Counter
 from urllib.parse import urljoin, urlsplit
 
 from . import net
+from .a11y import findings as a11y_findings
 from .html import parse_page
 from .site import parse_sitemap
 from .structured import jsonld
 
 MAX_HTML = 1_000_000
+MAX_IMAGE = 300_000
 
 
 def norm(url):
@@ -55,7 +59,7 @@ def fetch_status(url, fetch=net.fetch, method="GET"):
         return None, url, [], b"", {}
 
 
-def page_findings(parsed, url, body_len, titles_seen):
+def page_findings(parsed, url, body_len, titles_seen, html="", descriptions_seen=None):
     """The per-page issues (pure)."""
     issues = []
     if not parsed["title"]:
@@ -80,6 +84,10 @@ def page_findings(parsed, url, body_len, titles_seen):
         issues.append("JSON-LD that does not parse")
     if parsed["title"] and titles_seen.get(parsed["title"], 0) > 1:
         issues.append("duplicate title")
+    if descriptions_seen and parsed["meta_description"] and descriptions_seen.get(parsed["meta_description"], 0) > 1:
+        issues.append("duplicate meta description")
+    if html:
+        issues.extend(a11y_findings(html, parsed["title"], parsed["meta_description"]))
     return issues
 
 
@@ -108,13 +116,14 @@ def crawl(start_url, max_pages, fetch=net.fetch, delay=0.0, seeds=()):
         seen.add(url)
         status, final, hops, body, headers = fetch_status(url, fetch)
         ctype = (headers.get("content-type") or "")
-        entry = {"status": status, "final_url": final, "hops": hops, "body_len": len(body), "parsed": None}
+        entry = {"status": status, "final_url": final, "hops": hops, "body_len": len(body), "parsed": None, "html": ""}
         if status == 200 and ("html" in ctype or not ctype):
             try:
                 parsed = parse_page(body.decode("utf-8", errors="replace"), final or url)
             except Exception:
                 parsed = None
             entry["parsed"] = parsed
+            entry["html"] = body.decode("utf-8", errors="replace") if parsed else ""
             if parsed:
                 for l in parsed["links"]:
                     href = l["href"]
@@ -141,6 +150,7 @@ def audit(start_url, max_pages=200, fetch=net.fetch, external_limit=100, check_e
 
     # pages
     titles = Counter(p["parsed"]["title"] for p in pages.values() if p["parsed"] and p["parsed"]["title"])
+    descriptions = Counter(p["parsed"]["meta_description"] for p in pages.values() if p["parsed"] and p["parsed"]["meta_description"])
     for url, p in pages.items():
         if p["status"] is None:
             issues.append(("unreachable", url, "no answer"))
@@ -153,7 +163,7 @@ def audit(start_url, max_pages=200, fetch=net.fetch, external_limit=100, check_e
         elif p["hops"]:
             issues.append(("internal link redirects", url, f"-> {p['final_url']}; link to the final URL from {', '.join(sorted(targets.get(url, [])))[:200] or 'the sitemap'}"))
         if p["parsed"]:
-            for f in page_findings(p["parsed"], p["final_url"] or url, p["body_len"], titles):
+            for f in page_findings(p["parsed"], p["final_url"] or url, p["body_len"], titles, p.get("html", ""), descriptions):
                 issues.append(("page", url, f))
 
     # link targets not crawled as pages: images and files on this host, and external links
@@ -172,13 +182,17 @@ def audit(start_url, max_pages=200, fetch=net.fetch, external_limit=100, check_e
             if status is None or status >= 400:
                 issues.append(("broken external link", t, f"{'HTTP ' + str(status) if status else 'no answer'}, linked from {', '.join(sorted(sources))[:200]}"))
             continue
-        status, final, hops, _, _ = fetch_status(t, fetch, method="HEAD")
+        status, final, hops, _, headers = fetch_status(t, fetch, method="HEAD")
         if status in (405, 403):
-            status, final, hops, _, _ = fetch_status(t, fetch)
+            status, final, hops, _, headers = fetch_status(t, fetch)
         if status is None or status >= 400:
             issues.append(("broken internal link", t, f"{'HTTP ' + str(status) if status else 'no answer'}, linked from {', '.join(sorted(sources))[:200]}"))
         elif hops:
             issues.append(("internal link redirects", t, f"-> {final}; link to the final URL from {', '.join(sorted(sources))[:200]}"))
+        else:
+            size = int(headers.get("content-length") or 0) if str(headers.get("content-length") or "").isdigit() else 0
+            if (headers.get("content-type") or "").startswith("image/") and size > MAX_IMAGE:
+                issues.append(("heavy image", t, f"{size // 1024} KB; resize or compress it (under {MAX_IMAGE // 1024} KB)"))
 
     # sitemap drift
     s = urlsplit(start_url)

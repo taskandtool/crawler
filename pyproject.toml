@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ttcrawl"
-version = "0.1.2"
+version = "0.1.3"
 description = "Read a website into raw material an AI can work from: pages as markdown, an inventory, the header and footer as structure, media, structured data, linked documents, a WordPress export, and a launch check."
 readme = "README.md"
 license = { text = "MIT" }
