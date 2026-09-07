@@ -121,3 +121,17 @@ tt-crawl places --place-id ChIJ... --out raw/places
 ```
 
 Several matches print the candidates and exit 3; `--first` takes the first.
+
+## `tt-crawl audit`
+
+The weekly health check of a live site, meant to run as a scheduled job
+(exit 1 when anything needs fixing, which is what alerts the owner):
+broken internal links and images, broken external links, redirect chains,
+pages without a title, description, or a single h1, duplicate titles,
+images without alt text, canonical tags pointing elsewhere, noindex
+pages, sitemap drift, JSON-LD that does not parse, oversized pages.
+`--inventory` adds the old URLs the way `check` does.
+
+```
+tt-crawl audit https://theirdomain.com --out raw/web/_audit.md [--max-pages 200] [--no-external]
+```
