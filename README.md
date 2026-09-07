@@ -104,3 +104,20 @@ The unit tests cover the pure parts on fixture HTML. The real proof is the
 Task & Tool live checks that install a Starter App on a machine and crawl a
 public site through the browser. A pre-push secret scan guards this
 repository; it holds no credentials by design.
+
+## `tt-crawl places`
+
+The business's public Google listing through the Places API (New) with a
+plain API key (`GOOGLE_PLACES_API_KEY`; on Task & Tool it arrives through a
+Google Places connection exposed to the app): name, address, phone,
+website, opening hours as schema.org strings, rating and review count, the
+most relevant reviews with author and date, photo count. Writes
+`raw/places/<place_id>.json` (verbatim) and `.md` (a summary), the seed for
+a `business` note and a citable source for `proof.md`.
+
+```
+tt-crawl places "Business name, City" --out raw/places [--first]
+tt-crawl places --place-id ChIJ... --out raw/places
+```
+
+Several matches print the candidates and exit 3; `--first` takes the first.
