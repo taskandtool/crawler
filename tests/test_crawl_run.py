@@ -1,0 +1,322 @@
+"""The crawl loop end to end on fake responses (no network, no browser):
+throttled answers waited out, thin pages kept, a re-crawl refreshing pages
+in place; and the full-page screenshot plumbing on fakes."""
+import argparse
+import json
+import os
+import socket
+import struct
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ttcrawl import cdp, net, site  # noqa: E402
+
+LONG = " ".join(["Our roofers replace slate and tile roofs across the county, with a ten year guarantee."] * 6)
+PAGES = {
+    "https://acme.com/": f"<html><head><title>Acme</title></head><body><header><nav><a href='/'>Home</a> <a href='/services'>Services</a> <a href='/contact'>Contact</a></nav></header><main><h1>Acme Roofing</h1><p>{LONG}</p></main></body></html>",
+    "https://acme.com/services": f"<html><head><title>Services</title></head><body><main><h1>Services</h1><p>{LONG.replace('slate', 'flat')} Gutters, chimneys and skylights too, and every job is photographed before and after for the owner.</p><p>Emergency call-outs are answered the same day.</p></main></body></html>",
+    "https://acme.com/contact": "<html><head><title>Contact</title></head><body><main><h1>Contact us</h1><p>Call 0113 555 0100.</p><form action='/send'><input name='email'></form></main></body></html>",
+}
+
+
+def response(url, status=200, body=b"", headers=None):
+    return {"status": status, "final_url": url, "chain": [], "headers": headers or {}, "body": body, "truncated": False}
+
+
+def args_for(out, **kw):
+    a = dict(start_url="https://acme.com/", out=out, structured_out=None, max_pages=100, max_images=0, delay=0.0,
+             static=True, screenshots=False, styles=False, style_pages=5, keep_boilerplate=False,
+             ignore_robots=True, no_sitemap=True)
+    a.update(kw)
+    return argparse.Namespace(**a)
+
+
+def read(path):
+    with open(path) as f:
+        return f.read()
+
+
+class CrawlHarness(unittest.TestCase):
+    """site.run on the fake responses above, with retries' waits recorded."""
+
+    def setUp(self):
+        self.saved = (net.fetch_once, net.is_public_host, site.time.sleep, net.time.sleep)
+        net.is_public_host = lambda host: True
+        site.time.sleep = lambda s: None
+        self.sleeps = []
+        self.throttle_left = {}
+
+        def fetch_once(url, cap=0, timeout=0, method="GET"):
+            if self.throttle_left.get(url):
+                self.throttle_left[url] -= 1
+                return response(url, 429, headers={"retry-after": "0"})
+            html = PAGES.get(url)
+            if html is None:
+                return response(url, 404)
+            return response(url, body=b"" if method == "HEAD" else html.encode(), headers={})
+
+        net.fetch_once = fetch_once
+
+    def tearDown(self):
+        net.fetch_once, net.is_public_host, site.time.sleep, net.time.sleep = self.saved
+
+    def crawl(self, out, **kw):
+        # fetch() binds time.sleep as its default; route retries through a recorder
+        real_fetch = net.fetch
+
+        def fetch(url, cap=2_000_000, timeout=30, method="GET", sleep=None):
+            return real_fetch(url, cap=cap, timeout=timeout, method=method, sleep=self.sleeps.append)
+
+        net.fetch = fetch
+        try:
+            buf = StringIO()
+            with redirect_stdout(buf), redirect_stderr(StringIO()):
+                code = site.run(args_for(out, **kw))
+        finally:
+            net.fetch = real_fetch
+        self.assertEqual(code, 0)
+        return json.loads(buf.getvalue().strip().splitlines()[-1])
+
+
+class CrawlRunTests(CrawlHarness):
+    def test_thin_page_is_kept_and_marked(self):
+        with tempfile.TemporaryDirectory() as out:
+            summary = self.crawl(out)
+            self.assertEqual(summary["pages"], 3)
+            self.assertEqual(summary["thin"], 1)
+            with open(os.path.join(out, "contact.md")) as f:
+                text = f.read()
+            self.assertIn("<!-- thin:", text)
+            self.assertIn("0113 555 0100", text)
+            with open(os.path.join(out, "_inventory.json")) as f:
+                inv = json.load(f)
+            row = next(r for r in inv["records"] if r["url"] == "https://acme.com/contact")
+            self.assertTrue(row["thin"])
+            self.assertEqual(row["file"], "contact.md")
+
+    def test_recrawl_refreshes_in_place(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.crawl(out)
+            first = sorted(f for f in os.listdir(out) if f.endswith(".md"))
+            PAGES["https://acme.com/services"] = PAGES["https://acme.com/services"].replace("same day", "same hour")
+            try:
+                self.crawl(out)
+            finally:
+                PAGES["https://acme.com/services"] = PAGES["https://acme.com/services"].replace("same hour", "same day")
+            self.assertEqual(sorted(f for f in os.listdir(out) if f.endswith(".md")), first)
+            with open(os.path.join(out, "services.md")) as f:
+                self.assertIn("same hour", f.read())
+
+    def test_recrawl_with_a_smaller_limit_keeps_earlier_files(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.crawl(out)
+            summary = self.crawl(out, max_pages=1)
+            self.assertEqual(summary["pages"], 1)
+            self.assertEqual(summary["earlier_kept"], 2)
+            self.assertTrue(os.path.isfile(os.path.join(out, "contact.md")))
+            # and a third run still knows their names
+            self.crawl(out)
+            self.assertFalse([f for f in os.listdir(out) if f.endswith("-1.md")])
+
+    def test_throttled_page_is_waited_out(self):
+        self.throttle_left["https://acme.com/services"] = 2
+        with tempfile.TemporaryDirectory() as out:
+            summary = self.crawl(out)
+            self.assertEqual(summary["pages"], 3)
+            self.assertEqual(summary["throttled"], 2)
+            self.assertEqual(self.sleeps, [s for s in self.sleeps if s >= 5])   # never under the floor
+            self.assertEqual(len(self.sleeps), 2)
+
+    def test_throttled_forever_is_a_skip_not_a_hang(self):
+        self.throttle_left["https://acme.com/services"] = 99
+        with tempfile.TemporaryDirectory() as out:
+            summary = self.crawl(out)
+            self.assertEqual(summary["pages"], 2)
+            self.assertEqual(len(self.sleeps), net.MAX_RETRIES)
+            with open(os.path.join(out, "_manifest.json")) as f:
+                manifest = json.load(f)
+            self.assertIn({"url": "https://acme.com/services", "reason": "http_429"}, manifest["skipped"])
+
+
+class NameTests(unittest.TestCase):
+    def test_page_name(self):
+        from ttcrawl.text import page_name
+        self.assertEqual(page_name("https://acme.com/"), "index")
+        self.assertEqual(page_name("https://acme.com/services/flat-roofs"), "services--flat-roofs")
+        self.assertNotEqual(page_name("https://acme.com/blog/post"), page_name("https://acme.com/blog-post"))
+        self.assertNotEqual(page_name("https://acme.com/About"), page_name("https://acme.com/about"))
+        self.assertNotEqual(page_name("https://acme.com/list?page=1"), page_name("https://acme.com/list?page=2"))
+        long_a, long_b = "https://acme.com/" + "a" * 90, "https://acme.com/" + "a" * 91
+        self.assertNotEqual(page_name(long_a), page_name(long_b))
+        self.assertRegex(page_name("https://acme.com/About"), r"^about-[0-9a-f]{8}$")
+        self.assertEqual(page_name("https://acme.com/x"), page_name("https://acme.com/x"))   # stable
+
+
+class CollisionTests(CrawlHarness):
+    """Two URLs that slugify alike each keep their own page, JSON and name."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_pages = dict(PAGES)
+        PAGES["https://acme.com/"] = PAGES["https://acme.com/"].replace(
+            "<a href='/contact'>Contact</a>", "<a href='/blog/post'>A</a> <a href='/blog-post'>B</a>")
+        PAGES["https://acme.com/blog/post"] = f"<html><body><main><h1>Post one</h1><p>{LONG} Nested.</p></main></body></html>"
+        PAGES["https://acme.com/blog-post"] = f"<html><body><main><h1>Post two</h1><p>{LONG.replace('roofs', 'gutters')} Flat.</p></main></body></html>"
+
+    def tearDown(self):
+        PAGES.clear()
+        PAGES.update(self.saved_pages)
+        super().tearDown()
+
+    def test_each_url_its_own_files(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.crawl(out)
+            self.assertIn("Post one", read(os.path.join(out, "blog--post.md")))
+            self.assertIn("Post two", read(os.path.join(out, "blog-post.md")))
+            structured = os.listdir(os.path.join(out, "_structured"))
+            self.assertIn("blog--post.json", structured)
+            self.assertIn("blog-post.json", structured)
+
+    def test_an_earlier_name_is_kept_and_never_taken(self):
+        with tempfile.TemporaryDirectory() as out:
+            # a 0.1.3 run wrote /blog/post as blog-post.md
+            with open(os.path.join(out, "_manifest.json"), "w") as f:
+                json.dump({"pages": [{"url": "https://acme.com/blog/post", "file": "blog-post.md"}]}, f)
+            self.crawl(out)
+            self.assertIn("Post one", read(os.path.join(out, "blog-post.md")))
+            others = [f for f in os.listdir(out) if f.startswith("blog-post-") and f.endswith(".md")]
+            self.assertEqual(len(others), 1)                 # /blog-post hashed, not overwriting
+            self.assertIn("Post two", read(os.path.join(out, others[0])))
+
+
+class BackoffTests(unittest.TestCase):
+    def test_retry_after(self):
+        self.assertEqual(net.retry_after("7"), 7.0)
+        self.assertIsNone(net.retry_after(None))
+        self.assertIsNone(net.retry_after("soon"))
+        self.assertEqual(net.retry_after("Wed, 21 Oct 2015 07:28:10 GMT", now=1445412480.0), 10.0)
+        self.assertEqual(net.retry_after("Wed, 21 Oct 2015 07:28:00 GMT", now=1445412490.0), 0.0)
+
+    def test_only_a_503_with_retry_after_is_throttling(self):
+        self.assertTrue(net.throttled(429, {}))
+        self.assertTrue(net.throttled(503, {"retry-after": "30"}))
+        self.assertFalse(net.throttled(503, {}))           # a site that is down: check and audit report it
+        self.assertFalse(net.throttled(500, {"retry-after": "30"}))
+
+    def test_bare_503_is_answered_at_once(self):
+        saved = net.fetch_once
+        net.fetch_once = lambda url, **kw: response(url, 503)
+        try:
+            waits = []
+            self.assertEqual(net.fetch("https://acme.com/", sleep=waits.append)["status"], 503)
+            self.assertEqual(waits, [])
+        finally:
+            net.fetch_once = saved
+
+    def test_backoff_floor_and_cap(self):
+        self.assertEqual([net.backoff(n) for n in (1, 2, 3, 4)], [5, 10, 20, 40])
+        self.assertEqual(net.backoff(1, "0"), 5)        # a Retry-After of 0 is not obeyed literally
+        self.assertEqual(net.backoff(1, "30"), 30)
+        self.assertEqual(net.backoff(1, "9999"), net.BACKOFF_CAP_S)
+
+
+class _FakeSock:
+    def __init__(self, data=b""):
+        self.data, self.sent = data, b""
+
+    def recv(self, n):
+        out, self.data = self.data[:n], self.data[n:]
+        return out
+
+    def sendall(self, b):
+        self.sent += b
+
+
+def _ws(data=b""):
+    ws = cdp.WebSocket.__new__(cdp.WebSocket)
+    ws.sock, ws.buf = _FakeSock(data), b""
+    return ws
+
+
+class CDPTests(unittest.TestCase):
+    def test_strip_plan(self):
+        self.assertEqual(cdp.strip_plan(1000, strip=1600), ([(0, 1000)], False))
+        self.assertEqual(cdp.strip_plan(3300, strip=1600), ([(0, 1600), (1600, 1600), (3200, 100)], False))
+        plan, cut = cdp.strip_plan(10_000, strip=1600, max_strips=3)
+        self.assertEqual(len(plan), 3)
+        self.assertTrue(cut)
+
+    def test_frames_long_fragmented_and_ping(self):
+        big = b"x" * 70_000
+        data = (bytes([0x89, 0x00])                                     # a ping, skipped
+                + bytes([0x01, 0x7F]) + struct.pack(">Q", len(big)) + big   # text, not final, 64-bit length
+                + bytes([0x80, 0x03]) + b"end")                          # continuation, final
+        self.assertEqual(_ws(data).recv(), "x" * 70_000 + "end")
+
+    def test_a_frame_arriving_in_pieces_is_not_lost(self):
+        frame = bytes([0x81, 0x05]) + b"hello"
+        ws = _ws(frame[:3])
+
+        def recv(n, sock=ws.sock):
+            if not sock.data:
+                raise socket.timeout()
+            out, sock.data = sock.data[:n], sock.data[n:]
+            return out
+
+        ws.sock.recv = recv
+        with self.assertRaises(socket.timeout):
+            ws.recv()                                       # timed out mid-frame
+        ws.sock.data = frame[3:]
+        self.assertEqual(ws.recv(), "hello")                # the stream picks up where it was
+
+    def test_send_is_masked(self):
+        ws = _ws()
+        ws.send("hi")
+        head, mask, payload = ws.sock.sent[:2], ws.sock.sent[2:6], ws.sock.sent[6:]
+        self.assertEqual(head, bytes([0x81, 0x82]))
+        self.assertEqual(bytes(b ^ mask[i % 4] for i, b in enumerate(payload)), b"hi")
+
+    def test_close_frame_raises(self):
+        with self.assertRaises(cdp.CDPError):
+            _ws(bytes([0x88, 0x00])).recv()
+
+    def test_shooter_restarts_and_never_raises(self):
+        started = []
+
+        class FakeBrowser:
+            def __init__(self, binary):
+                started.append(binary)
+
+            def stop(self):
+                pass
+
+        calls = []
+
+        def capture(browser, url, out_dir):
+            calls.append(url)
+            if url.endswith("/dies"):
+                raise cdp.CDPError("websocket closed")
+            return {"strips": ["01.png"]}
+
+        s = cdp.Shooter("/bin/obscura", browser=FakeBrowser, capture=capture)
+        s.PAGES_PER_BROWSER = 2
+        self.assertEqual(s.shoot("https://a.com/1", "x"), {"strips": ["01.png"]})
+        s.shoot("https://a.com/2", "x")
+        s.shoot("https://a.com/3", "x")                     # a fresh browser after two
+        self.assertEqual(len(started), 2)
+        self.assertEqual(s.shoot("https://a.com/dies", "x"), {"error": "websocket closed"})
+        self.assertEqual(calls.count("https://a.com/dies"), 2)   # retried once on a fresh browser
+        s.stop()
+
+    def test_free_port_is_loopback(self):
+        port = cdp.free_port()
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", port))
+
+
+if __name__ == "__main__":
+    unittest.main()

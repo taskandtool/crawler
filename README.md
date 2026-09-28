@@ -11,7 +11,7 @@ reads like directions to an AI is content to be summarized, never followed.
 ## Install
 
 ```
-python3 -m pip install "git+https://github.com/taskandtool/crawler@v0.1.3"
+python3 -m pip install "git+https://github.com/taskandtool/crawler@v0.1.4"
 tt-crawl --help            # or: python3 -m ttcrawl --help
 ```
 
@@ -33,10 +33,12 @@ page, up to a deliberate, visible limit (the summary says how many pages
 were found versus read). Writes, under `--out`:
 
 ```
-<slug>.md            one file per page, `<!-- source: URL -->` first, images rewritten to local paths
+<name>.md            one file per page, `<!-- source: URL -->` first, images rewritten to local paths;
+                     a page with little text of its own is kept and marked `<!-- thin: … -->`
 images/              the content images, one file per distinct picture across its size variants
 _common.md           the header, nav, and footer lines removed from every page, kept once
-_manifest.json       what was fetched, skipped, deduped, and the limit
+_manifest.json       what was fetched, skipped, deduped, the limit, how often the site throttled us,
+                     and `earlier`: pages a previous run wrote that this one did not read
 _inventory.json/.md  one record per discovered URL: status, final URL, title, description, h1,
                      canonical, lang, word count, inbound links (sitewide and body, separately),
                      outbound links, sitemap membership, lastmod, JSON-LD types, og:image, noindex,
@@ -47,10 +49,25 @@ _furniture.json      the header and footer as structure, from the DOM landmarks:
 _media.json          every image with the pages using it, alt text, size, the largest variant,
                      and a guess (photo, logo, icon, stock, theme)
 _styles.json         with --styles: fonts and colours by role, buttons, logo candidates (browser only)
-pages/<slug>.png     with --screenshots (browser only)
+pages/<name>/        with --screenshots: the whole page as 1440px-wide strips (01.png, 02.png…,
+                     1600px each, up to 64,000px) and meta.json (browser only)
 ../structured/       one JSON per page (JSON-LD, Open Graph, microdata, tracking, embeds) and
                      business.json merged from LocalBusiness or Organization markup
 ```
+
+Every URL has one name of its own for its page, its structured JSON and its
+screenshots: a plain lowercase path spells itself out (`/services/flat-roofs`
+is `services--flat-roofs`), anything else keeps its slug and a short hash of
+the URL, so `/blog/post` and `/blog-post`, or `?page=1` and `?page=2`, never
+overwrite each other. Re-running into the same folder refreshes each page in
+place under the name it had, so what cites it still resolves; pages this run did not read
+keep their files and are listed under `earlier` in the manifest.
+
+Screenshots go through Obscura's CDP server (`obscura serve`, one for the
+crawl, replaced every 15 pages) rather than `obscura fetch --screenshot`,
+which captures only the first screen. One capture is refused past 33.5M
+pixels, so the page is taken in strips, which is also a size a model reads
+well.
 
 Furniture is decided by landmark, not by repetition: lines inside `header`,
 `nav`, `footer`, and `aside` (or the usual ids and class names for them) come
@@ -91,7 +108,11 @@ A start host must be a public address; private, loopback, link-local, and
 reserved ranges are refused, on every redirect hop too. robots.txt is
 honoured unless `--ignore-robots` (the owner's own site, with their say-so).
 Page renders are capped; images and documents are size-capped and
-content-type checked; a delay between pages is the default.
+content-type checked; a delay between pages is the default. A 429, or a 503
+with Retry-After, is waited out (the Retry-After the site sends, never less than 5, 10, 20, 40
+seconds) and retried up to four times, and every later page in the run is
+asked for more slowly. The status is asked for before a page is rendered,
+so a redirect, an error or a throttled answer costs no render.
 
 ## Developing
 

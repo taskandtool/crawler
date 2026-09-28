@@ -6,7 +6,7 @@ import sys
 
 from . import browser, net, structured
 from .html import parse_page
-from .text import slugify
+from .text import page_name
 
 
 def run(args):
@@ -26,7 +26,7 @@ def run(args):
                 continue
         parsed = parse_page(html, url)
         rec = structured.page_structured(parsed, html)
-        with open(os.path.join(args.out, slugify(url) + ".json"), "w") as f:
+        with open(os.path.join(args.out, page_name(url) + ".json"), "w") as f:
             json.dump(rec, f, indent=2)
         results.append({"url": url, "jsonld_types": rec["jsonld_types"], "tracking": list(rec["tracking"].keys()),
                         "embeds": len(rec["embeds"])})

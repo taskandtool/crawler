@@ -19,6 +19,22 @@ def slugify(url):
     return (slug or "index")[:80]
 
 
+CLEAN_PATH_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)*")
+
+
+def page_name(url, hashed=False):
+    """A file stem that is one URL's own (pure). A lowercase, hyphenated path
+    with no query spells itself out, `/` as `--` (so /blog/post and /blog-post
+    stay apart); anything slugify would lose (case, other characters, a query,
+    length) keeps a short hash of the whole URL beside its slug, as does any
+    URL with `hashed`."""
+    parts = urlsplit(url)
+    path = parts.path.strip("/")
+    if not hashed and not parts.query and len(path) <= 80 and (not path or CLEAN_PATH_RE.fullmatch(path)):
+        return path.replace("/", "--") or "index"
+    return "%s-%s" % (slugify(url)[:70], hashlib.sha1(url.encode()).hexdigest()[:8])
+
+
 def ext_for(url, ctype):
     for cand in (os.path.splitext(urlsplit(url).path)[1].lstrip("."), ctype.split("/")[-1]):
         if cand and re.fullmatch(r"[a-z0-9]{2,5}", cand.lower()):

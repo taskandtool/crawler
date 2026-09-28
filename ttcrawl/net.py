@@ -2,14 +2,18 @@
 
 The AI drives these fetches from inside our infrastructure, so every host is
 checked against private, loopback, link-local, and reserved ranges before a
-request, and again on every redirect hop.
+request, and again on every redirect hop. A 429 (or a 503 with Retry-After)
+is waited out and retried, never hammered.
 """
 import gzip
 import ipaddress
+import random
 import socket
+import time
 import zlib
 import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request
 
@@ -96,7 +100,60 @@ class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_GuardedRedirect())
 
 
-def fetch(url, cap=2_000_000, timeout=30, method="GET"):
+def throttled(status, headers):
+    """A 429 always; a 503 only when it says when to come back (Retry-After).
+    A bare 503 is usually a site that is down, which `check` and `audit` must
+    report, not wait out (pure)."""
+    return status == 429 or (status == 503 and retry_after(headers.get("retry-after")) is not None)
+MAX_RETRIES = 4
+BACKOFF_CAP_S = 120
+
+# Called with (url, status, wait_s) each time a site throttles us, so a crawl
+# can slow every later request too, not only retry this one.
+on_throttle = None
+
+
+def retry_after(value, now=None):
+    """Retry-After as seconds: delta-seconds or an HTTP date; None when absent
+    or unreadable (pure)."""
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value).timestamp()
+    except (TypeError, ValueError, IndexError):
+        return None
+    return max(0.0, when - (time.time() if now is None else now))
+
+
+def backoff(attempt, header=None, jitter=0.0):
+    """Seconds before the nth retry: what the site asks, never less than the
+    doubling floor (5, 10, 20, 40), capped. A site that sends `Retry-After: 0`
+    with its 429s would otherwise get four retries inside a second (pure)."""
+    floor = 5 * 2 ** (attempt - 1)
+    return min(BACKOFF_CAP_S, max(retry_after(header) or 0, floor) + jitter)
+
+
+def fetch(url, cap=2_000_000, timeout=30, method="GET", sleep=time.sleep):
+    """`fetch_once`, retrying a throttled answer after the wait the site asks for
+    (or the doubling floor), up to four times; the last answer is returned
+    as it came."""
+    attempt = 1
+    while True:
+        r = fetch_once(url, cap=cap, timeout=timeout, method=method)
+        if not throttled(r["status"], r["headers"]) or attempt > MAX_RETRIES:
+            return r
+        wait = backoff(attempt, r["headers"].get("retry-after"), jitter=random.random())
+        if on_throttle:
+            on_throttle(url, r["status"], wait)
+        sleep(wait)
+        attempt += 1
+
+
+def fetch_once(url, cap=2_000_000, timeout=30, method="GET"):
     """Fetch a URL with the guard. Returns a dict: status, final_url, chain
     (the redirect hops as (status, url)), headers, body (bytes, capped).
     Raises urllib errors for network failures; an HTTP error status is a
@@ -149,9 +206,26 @@ def fetch_text(url, cap=2_000_000, timeout=30):
     return r["body"].decode("utf-8", "replace")
 
 
-def fetch_bytes(url, cap, content_types=IMAGE_CONTENT_TYPES):
+def fetch_bytes(url, cap, content_types=IMAGE_CONTENT_TYPES, sleep=time.sleep):
     """Bytes of a URL when its Content-Type starts with one of
-    `content_types` and it is under `cap`; else (None, content_type)."""
+    `content_types` and it is under `cap`; else (None, content_type).
+    Throttled answers are retried the way `fetch` retries them."""
+    attempt = 1
+    while True:
+        try:
+            return _fetch_bytes_once(url, cap, content_types)
+        except urllib.error.HTTPError as e:
+            headers = {k.lower(): v for k, v in (e.headers or {}).items()}
+            if not throttled(e.code, headers) or attempt > MAX_RETRIES:
+                raise
+            wait = backoff(attempt, headers.get("retry-after"), jitter=random.random())
+            if on_throttle:
+                on_throttle(url, e.code, wait)
+            sleep(wait)
+            attempt += 1
+
+
+def _fetch_bytes_once(url, cap, content_types):
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"})
     with _opener.open(req, timeout=30) as resp:
         ctype = resp.headers.get("Content-Type", "")

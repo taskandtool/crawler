@@ -1,6 +1,7 @@
-"""The Obscura headless browser, as this tool uses it: render a page's DOM,
-take a screenshot, and read computed styles. Installing Obscura is the
-kits' setup job; this only finds and runs it."""
+"""The Obscura headless browser, as this tool uses it: render a page's DOM
+and read computed styles. Full-page screenshots go through its CDP server
+(cdp.py). Installing Obscura is the kits' setup job; this only finds and
+runs it."""
 import json
 import os
 import shutil
@@ -74,17 +75,6 @@ def render_html(url, binary, runner=subprocess.run, timeout=RENDER_TIMEOUT_S):
         return None
     out = proc.stdout.decode("utf-8", "replace") if isinstance(proc.stdout, bytes) else (proc.stdout or "")
     return out if out.strip() else None
-
-
-def screenshot(url, binary, path, runner=subprocess.run, timeout=RENDER_TIMEOUT_S):
-    """A PNG of the rendered page at `path`. Its own render: asked for in the
-    same call as a dump, Obscura writes the file and prints nothing."""
-    cmd = [binary, "fetch", url, "--quiet", "--timeout", "30", "--screenshot", path]
-    try:
-        proc = runner(cmd, capture_output=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    return proc.returncode == 0
 
 
 def read_styles(url, binary, runner=subprocess.run, timeout=RENDER_TIMEOUT_S):

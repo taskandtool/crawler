@@ -18,18 +18,19 @@ import time
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
-from . import browser, inventory, net, structured
+from . import browser, cdp, inventory, net, structured
 from .furniture import landmark_line_set, page_furniture, site_furniture
 from .html import parse_page
 from .media import build_media
 from .styles import merge_styles
 from .text import (MD_IMAGE_RE, MIN_MARKDOWN_CHARS, content_digest, ext_for, image_key, near_duplicate,
-                   rewrite_images, slugify, strip_common_lines, strip_lines, word_count)
+                   page_name, rewrite_images, strip_common_lines, strip_lines, word_count)
 
 DEFAULT_MAX_PAGES = 100
 MAX_IMAGE_BYTES = 15 * 1024 * 1024
 MAX_SITEMAPS = 10
 STYLE_PAGES = 5
+MAX_DELAY_S = 8
 
 
 def load_robots(start_url, ignore):
@@ -90,8 +91,6 @@ def sitemap_urls(start_url, extra_sitemaps, root_host):
 
 
 def run(args):
-    import trafilatura
-
     start = net.normalize_url(args.start_url)
     root_host = urlsplit(start or "").hostname or ""
     if not start or not root_host or not net.is_public_host(root_host):
@@ -99,12 +98,44 @@ def run(args):
         return 2
 
     obscura = None if args.static else browser.find_obscura()
-    robots, robots_sitemaps = load_robots(start, args.ignore_robots)
     out = args.out
     img_dir = os.path.join(out, "images")
     os.makedirs(img_dir, exist_ok=True)
-    if args.screenshots:
-        os.makedirs(os.path.join(out, "pages"), exist_ok=True)
+    earlier = earlier_files(out)
+    shooter = cdp.Shooter(obscura) if args.screenshots and obscura else None
+    # A site that throttles us once is asked more gently for the rest of the run.
+    pace = {"delay": args.delay, "throttled": 0}
+
+    def throttled(url, status, wait):
+        pace["throttled"] += 1
+        pace["delay"] = min(MAX_DELAY_S, max(pace["delay"], 0.5) * 2)
+        sys.stderr.write("%s %s: throttled; waiting %ds, then %.1fs between pages\n" % (status, url, wait, pace["delay"]))
+
+    net.on_throttle = throttled
+    try:
+        return _crawl(args, start, root_host, obscura, out, img_dir, earlier, shooter, pace)
+    finally:
+        net.on_throttle = None
+        if shooter:
+            shooter.stop()
+
+
+def earlier_files(out):
+    """{url: file} for the pages an earlier run wrote into `out`, so a re-crawl
+    refreshes each page in place under the same name."""
+    try:
+        with open(os.path.join(out, "_manifest.json")) as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    pages = (manifest.get("earlier") or []) + (manifest.get("pages") or [])
+    return {p["url"]: p["file"] for p in pages if p.get("url") and p.get("file")}
+
+
+def _crawl(args, start, root_host, obscura, out, img_dir, earlier, shooter, pace):
+    import trafilatura
+
+    robots, robots_sitemaps = load_robots(start, args.ignore_robots)
     # The harvest sits beside the owner's crawl (raw/web -> raw/structured);
     # any other crawl keeps it inside its own folder.
     if args.structured_out is not None:
@@ -146,6 +177,21 @@ def run(args):
                 records.setdefault(n, inventory.new_record(n))
                 queue.append(n)
 
+    # One name per URL for its page file, its structured JSON and its
+    # screenshots: the name an earlier run gave it, else its own page_name,
+    # hashed when another URL already holds that one.
+    owners = {os.path.splitext(f)[0]: u for u, f in earlier.items()}
+    names = {}
+
+    def name_for(url):
+        if url not in names:
+            stem = os.path.splitext(earlier[url])[0] if url in earlier else page_name(url)
+            if owners.get(stem, url) != url:
+                stem = page_name(url, hashed=True)
+            names[url], owners[stem] = stem, url
+        return names[url]
+
+    requested = 0
     while queue:
         if len(kept) >= args.max_pages:
             manifest["limit_reached"] = True
@@ -158,44 +204,56 @@ def run(args):
         if not robots.can_fetch(net.USER_AGENT, url):
             skip(url, "robots")
             continue
+        # Between every two requests, kept or not, at the pace the site allows.
+        if requested:
+            time.sleep(pace["delay"])
+        requested += 1
+
+        # The plain request first, for the status, the final URL and the
+        # headers (and the page itself when there is no browser): a redirect,
+        # an error or a throttled answer then costs no render.
+        try:
+            resp = net.fetch(url, method="GET" if obscura is None else "HEAD")
+        except Exception:
+            resp = None
+        if obscura and (resp is None or resp["status"] == 405):
+            # some servers refuse or drop a HEAD; ask once more the plain way
+            try:
+                resp = net.fetch(url)
+            except Exception:
+                resp = None
+        if resp is None:
+            skip(url, "fetch_failed")
+            continue
+        rec["status"], rec["final_url"] = resp["status"], resp["final_url"]
+        lm = resp["headers"].get("Last-Modified") or resp["headers"].get("last-modified")
+        if lm and not rec["lastmod"]:
+            try:
+                rec["lastmod"] = parsedate_to_datetime(lm).date().isoformat()
+            except Exception:
+                pass
+        final = net.normalize_url(resp["final_url"]) if resp["final_url"] else None
+        if final and final != url:
+            if net.same_site(final, root_host) and net.crawlable(final):
+                enqueue([final])
+            skip(url, "redirect")
+            continue
+        if resp["status"] and resp["status"] >= 400:
+            skip(url, "http_%d" % resp["status"])
+            continue
 
         html, rendered = None, False
-        shot = os.path.join(out, "pages", slugify(url) + ".png") if args.screenshots else None
         if obscura:
             html = browser.render_html(url, obscura)
             rendered = html is not None
-            if shot and browser.screenshot(url, obscura, shot) and os.path.isfile(shot):
-                rec["screenshot"] = os.path.relpath(shot, out)
-        # One plain request for the status, the final URL, and the headers,
-        # and the page itself when there is no browser.
-        try:
-            resp = net.fetch(url, method="GET" if html is None else "HEAD")
-            if html is None and resp["status"] == 405:
-                resp = net.fetch(url)
-        except Exception as e:
-            resp = None
-            if html is None:
-                skip(url, "fetch_failed")
-                continue
-        if resp:
-            rec["status"], rec["final_url"] = resp["status"], resp["final_url"]
-            lm = resp["headers"].get("Last-Modified") or resp["headers"].get("last-modified")
-            if lm and not rec["lastmod"]:
+        if html is None:
+            if not resp["body"]:
                 try:
-                    rec["lastmod"] = parsedate_to_datetime(lm).date().isoformat()
+                    resp = net.fetch(url)
                 except Exception:
-                    pass
-            final = net.normalize_url(resp["final_url"]) if resp["final_url"] else None
-            if final and final != url:
-                if net.same_site(final, root_host) and net.crawlable(final):
-                    enqueue([final])
-                skip(url, "redirect")
-                continue
-            if resp["status"] and resp["status"] >= 400:
-                skip(url, "http_%d" % resp["status"])
-                continue
-            if html is None:
-                html = resp["body"].decode("utf-8", "replace")
+                    skip(url, "fetch_failed")
+                    continue
+            html = resp["body"].decode("utf-8", "replace")
         if not html or not html.strip():
             skip(url, "fetch_failed")
             continue
@@ -207,7 +265,7 @@ def run(args):
         parsed_pages.append(parsed)
         furniture_pages.append(furniture)
         structured_pages.append(page_structured)
-        with open(os.path.join(structured_dir, slugify(url) + ".json"), "w") as f:
+        with open(os.path.join(structured_dir, name_for(url) + ".json"), "w") as f:
             json.dump(page_structured, f, indent=2)
 
         rec.update({
@@ -231,10 +289,13 @@ def run(args):
             if n and n != url:
                 inventory.add_inbound(records, url, n, sitewide=l["landmark"] in ("header", "nav", "footer", "aside"))
 
+        # A page with little text of its own (contact, gallery, a short
+        # landing page) is still the site's page: kept and marked thin, since
+        # it is often where the phone number, the photos or the form are.
         md = trafilatura.extract(html, output_format="markdown", include_links=True,
                                  include_images=True, favor_recall=True) or ""
-        if len(md) < MIN_MARKDOWN_CHARS:
-            skip(url, "thin")
+        if not md.strip():
+            skip(url, "empty")
             continue
         digest = content_digest(md)
         if digest in kept_hashes:
@@ -247,9 +308,14 @@ def run(args):
         kept_hashes.add(digest)
         kept_shingles.append(sset)
         kept.append({"url": url, "md": md, "rendered": rendered, "parsed": parsed})
+        if shooter:  # only the pages kept: a duplicate costs no capture
+            shot = shooter.shoot(url, os.path.join(out, "pages", name_for(url)))
+            if shot.get("strips"):
+                rec["screenshot"] = "pages/" + name_for(url)
+            else:
+                rec["screenshot_error"] = shot.get("error")
         if args.styles and obscura and len(style_readings) < args.style_pages:
             style_readings.append(browser.read_styles(url, obscura))
-        time.sleep(args.delay)
 
     # Furniture: landmark lines out of every page body; the repetition
     # heuristic only for pages that had no landmarks at all.
@@ -306,23 +372,30 @@ def run(args):
             local_map[raw_ref] = key_to_local[key]
         page["md"] = rewrite_images(page["md"], local_map)
 
-    # Pages. A page that was all furniture is not worth a file.
-    used = set()
+    # Pages. A page that was all furniture is not worth a file; a short one is
+    # kept and marked thin. Each is written under its URL's own name, so a
+    # re-crawl refreshes it in place and what cites it still resolves.
     for page in kept:
         rec = records[page["url"]]
-        if len(page["md"].strip()) < MIN_MARKDOWN_CHARS // 2:
+        if not page["md"].strip():
             skip(page["url"], "boilerplate_only")
             continue
-        slug = slugify(page["url"])
-        fname, n = f"{slug}.md", 1
-        while fname in used or os.path.exists(os.path.join(out, fname)):
-            fname = f"{slug}-{n}.md"
-            n += 1
-        used.add(fname)
+        fname = name_for(page["url"]) + ".md"
+        thin = len(page["md"].strip()) < MIN_MARKDOWN_CHARS
         with open(os.path.join(out, fname), "w") as f:
-            f.write(f"<!-- source: {page['url']} -->\n\n{page['md']}")
-        rec["file"], rec["word_count"] = fname, word_count(page["md"])
-        manifest["pages"].append({"url": page["url"], "file": fname, "chars": len(page["md"]), "rendered": page["rendered"]})
+            f.write(f"<!-- source: {page['url']} -->\n")
+            if thin:
+                f.write("<!-- thin: little text of its own; the inventory row has its title, forms and links -->\n")
+            f.write(f"\n{page['md']}")
+        rec["file"], rec["word_count"], rec["thin"] = fname, word_count(page["md"]), thin
+        manifest["pages"].append({"url": page["url"], "file": fname, "chars": len(page["md"]),
+                                  "rendered": page["rendered"], "thin": thin})
+    # Pages an earlier run wrote and this one did not read (a smaller limit,
+    # a page gone from the site): the files stay, listed so the next run and
+    # the reader know them.
+    read_now = {p["url"] for p in manifest["pages"]}
+    manifest["earlier"] = [{"url": u, "file": f} for u, f in sorted(earlier.items())
+                           if u not in read_now and os.path.isfile(os.path.join(out, f))]
 
     for url in queue:
         if url not in seen and records[url]["reason"] is None:
@@ -355,6 +428,7 @@ def run(args):
     manifest["discovered"] = len(discovered)
     manifest["unread"] = len([u for u in queue if u not in seen])
     manifest["common_lines"] = len(common_lines)
+    manifest["throttled"] = pace["throttled"]
     with open(os.path.join(out, "_manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2)
     inventory.write(records, out, start, {"limit": args.max_pages, "limit_reached": manifest["limit_reached"],
@@ -362,6 +436,8 @@ def run(args):
 
     summary = {"pages": len(manifest["pages"]), "discovered": manifest["discovered"], "unread": manifest["unread"],
                "limit": args.max_pages, "limit_reached": manifest["limit_reached"], "skipped": len(manifest["skipped"]),
+               "thin": sum(1 for p in manifest["pages"] if p["thin"]), "earlier_kept": len(manifest["earlier"]),
+               "throttled": pace["throttled"], "screenshots": sum(1 for r in records.values() if r.get("screenshot")),
                "images": manifest["images"], "rendered": sum(1 for p in manifest["pages"] if p["rendered"]),
                "common_lines": len(common_lines), "renderer": obscura,
                "inventory": len(records), "furniture_landmarks": site_view.get("has_landmarks", False),
@@ -395,7 +471,7 @@ def add_parser(sub):
     p.add_argument("--max-images", type=int, default=200)
     p.add_argument("--delay", type=float, default=0.5)
     p.add_argument("--static", "--no-render", action="store_true", dest="static", help="plain fetches only, never the browser")
-    p.add_argument("--screenshots", action="store_true", help="a PNG per page under pages/ (browser only)")
+    p.add_argument("--screenshots", action="store_true", help="the whole page as PNG strips under pages/<slug>/ (browser only)")
     p.add_argument("--styles", action="store_true", help="read computed styles off the first pages into _styles.json (browser only)")
     p.add_argument("--style-pages", type=int, default=STYLE_PAGES)
     p.add_argument("--keep-boilerplate", action="store_true", help="keep the header and footer lines in every page")

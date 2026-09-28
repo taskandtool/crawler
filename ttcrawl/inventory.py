@@ -6,7 +6,7 @@ import os
 FIELDS = ["url", "status", "final_url", "title", "meta_description", "h1", "h1_count", "canonical", "lang",
           "word_count", "inbound_sitewide", "inbound_body", "outbound_internal", "in_sitemap", "lastmod",
           "jsonld_types", "og_image", "noindex", "hreflang", "forms", "embeds", "tracking", "documents",
-          "file", "reason", "screenshot", "rendered", "traffic"]
+          "file", "thin", "reason", "screenshot", "screenshot_error", "rendered", "traffic"]
 
 
 def new_record(url):
@@ -15,7 +15,8 @@ def new_record(url):
             "inbound_sitewide": {"count": 0, "from": []}, "inbound_body": {"count": 0, "from": []},
             "outbound_internal": [], "in_sitemap": False, "lastmod": None, "jsonld_types": [],
             "og_image": None, "noindex": False, "hreflang": [], "forms": [], "embeds": [], "tracking": {},
-            "documents": [], "file": None, "reason": None, "screenshot": None, "rendered": False, "traffic": None}
+            "documents": [], "file": None, "thin": False, "reason": None, "screenshot": None,
+            "screenshot_error": None, "rendered": False, "traffic": None}
 
 
 def add_inbound(records, from_url, to_url, sitewide):

@@ -34,13 +34,8 @@ class BrowserTests(unittest.TestCase):
         out = browser.render_html("https://x.com/a", "/bin/obscura", runner=runner)
         self.assertIn("hello from js", out)
         self.assertEqual(seen["cmd"][:3], ["/bin/obscura", "fetch", "https://x.com/a"])
-        # a dump and a screenshot never share a call: Obscura prints nothing then
         self.assertNotIn("--screenshot", seen["cmd"])
         self.assertNotIn("--allow-private-network", seen["cmd"])
-        self.assertTrue(browser.screenshot("https://x.com/a", "/bin/obscura", "/tmp/a.png", runner=runner))
-        self.assertIn("--screenshot", seen["cmd"])
-        self.assertNotIn("--dump", seen["cmd"])
-        self.assertFalse(browser.screenshot("https://x.com/a", "/bin/o", "/tmp/a.png", runner=lambda c, **k: _Proc(1, b"")))
         self.assertIsNone(browser.render_html("https://x.com", "/bin/o", runner=lambda c, **k: _Proc(1, b"")))
         self.assertIsNone(browser.render_html("https://x.com", "/bin/o", runner=lambda c, **k: _Proc(0, b"  \n")))
 
