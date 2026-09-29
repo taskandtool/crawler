@@ -6,7 +6,6 @@ from urllib.parse import urlsplit
 
 from .html import BADGE_RE, COPYRIGHT_RE, CTA_RE, LEGAL_RE, SOCIAL_HOSTS
 from .net import same_site
-from .text import norm_line
 
 
 def _host(url):
@@ -127,19 +126,3 @@ def _flat(nodes):
         out.append(n)
         out.extend(_flat(n["children"]))
     return out
-
-
-def landmark_line_set(parsed_pages):
-    """Every normalized text line and link label that sits inside a landmark
-    on any page: what is stripped from the page bodies."""
-    lines = set()
-    for p in parsed_pages:
-        for texts in p["landmark_lines"].values():
-            for t in texts:
-                key = norm_line(t)
-                if key and len(key) > 1:
-                    lines.add(key)
-        for l in p["links"]:
-            if l["landmark"] and l["text"]:
-                lines.add(norm_line(l["text"]))
-    return lines

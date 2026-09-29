@@ -7,7 +7,7 @@ import re
 import sys
 from urllib.parse import urlsplit
 
-from . import net
+from . import net, paths
 from .text import html_to_text, slugify
 
 
@@ -60,10 +60,10 @@ def _url(base, path, query):
     return f"{base}{path}?{query}"
 
 
-def fetch_all(base, kind, fetch=net.fetch, per_page=100, max_pages=50):
+def fetch_all(base, kind, fetch=net.fetch, per_page=100, max_pages=50, extra=""):
     items, page = [], 1
     while page <= max_pages:
-        r = fetch(_url(base, f"/wp/v2/{kind}", f"per_page={per_page}&page={page}&_embed=0"), cap=20_000_000)
+        r = fetch(_url(base, f"/wp/v2/{kind}", f"per_page={per_page}&page={page}&_embed=0{extra}"), cap=20_000_000)
         if r["status"] != 200:
             break
         try:
@@ -107,6 +107,7 @@ def frontmatter(item, authors, categories, kind):
 
 
 def run(args):
+    args.out = args.out or os.path.join(paths.site_dir(args.site_url), "wp")
     if not net.public_http_url(args.site_url):
         sys.stderr.write("refusing: not a public http url\n")
         return 2
@@ -138,6 +139,8 @@ def run(args):
                                 "file": os.path.join(kind, f"{slug}.md")})
     with open(os.path.join(args.out, "index.json"), "w") as f:
         json.dump(index, f, indent=2)
+    # into a site's folder (raw/site/<host>/wp): the site's registry says it is done
+    paths.register_site(os.path.dirname(args.out.rstrip("/")), {"wp_imported": True})
     print(json.dumps({"detected": True, "base": base, "pages": len(index["pages"]), "posts": len(index["posts"]),
                       "authors": len(authors), "categories": len(categories), "out": args.out}))
     return 0
@@ -146,5 +149,5 @@ def run(args):
 def add_parser(sub):
     p = sub.add_parser("wp", help="a WordPress site's pages and posts through its public REST API")
     p.add_argument("site_url")
-    p.add_argument("--out", default="raw/structured/wp")
+    p.add_argument("--out", default=None, help="default raw/site/<host>/wp, inside the site's folder")
     p.set_defaults(func=run)

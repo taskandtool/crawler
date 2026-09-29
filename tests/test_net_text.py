@@ -47,18 +47,21 @@ class TextTests(unittest.TestCase):
         self.assertEqual(text.slugify("https://x.com/a/b/c/"), "a-b-c")
         self.assertLessEqual(len(text.slugify("https://x.com/" + "z" * 200)), 80)
 
-    def test_ext_for(self):
-        self.assertEqual(text.ext_for("https://x.com/a.png", ""), "png")
-        self.assertEqual(text.ext_for("https://x.com/a", "image/png"), "png")
-        self.assertEqual(text.ext_for("https://x.com/a.JPEG", ""), "jpg")
-        self.assertEqual(text.ext_for("https://x.com/a", "image/svg+xml"), "img")
+    def test_extension_follows_the_content_type(self):
+        from ttcrawl.media import extension
+        self.assertEqual(extension("", "https://x.com/a.png"), "png")
+        self.assertEqual(extension("image/png", "https://x.com/a"), "png")
+        self.assertEqual(extension("image/png", "https://x.com/a.jpg"), "png")      # what it is, not what it is called
+        self.assertEqual(extension("image/svg+xml; charset=utf-8", "https://x.com/a"), "svg")
+        self.assertEqual(extension("", "https://x.com/a"), "img")
 
-    def test_image_key_collapses_variants(self):
-        k = text.image_key("https://x.com/wp-content/uploads/team.jpg")
-        for v in ("https://x.com/wp-content/uploads/team-300x200.jpg?v=3", "https://X.com/wp-content/uploads/team-scaled.jpg",
+    def test_one_key_across_an_images_sizes(self):
+        from ttcrawl.media import variant_of
+        k = variant_of("https://x.com/wp-content/uploads/team.jpg")[0]
+        for v in ("https://x.com/wp-content/uploads/team-300x200.jpg?w=300", "https://X.com/wp-content/uploads/team-scaled.jpg",
                   "https://x.com/wp-content/uploads/team@2x.jpg"):
-            self.assertEqual(text.image_key(v), k)
-        self.assertNotEqual(text.image_key("https://x.com/wp-content/uploads/team2.jpg"), k)
+            self.assertEqual(variant_of(v)[0], k)
+        self.assertNotEqual(variant_of("https://x.com/wp-content/uploads/team2.jpg")[0], k)
 
     def test_rewrite_images_touches_only_mapped_image_tokens(self):
         md = "![a](https://x.com/a.jpg) and ![b](https://x.com/a.jpg?w=800) see [also](https://x.com/a.jpg)"
@@ -66,37 +69,33 @@ class TextTests(unittest.TestCase):
         self.assertEqual(out, "![a](images/h1.jpg) and ![b](https://x.com/a.jpg?w=800) see [also](https://x.com/a.jpg)")
 
     def test_near_duplicate(self):
-        a = "the quick brown fox jumps over the lazy dog again and again " * 5
-        dup, sset = text.near_duplicate(a, [])
-        self.assertFalse(dup)
-        self.assertTrue(text.near_duplicate(a, [sset])[0])
-        b = "we bake sourdough bread and pastries fresh every morning downtown " * 3
-        self.assertFalse(text.near_duplicate(b, [sset])[0])
-
-    NAV = "[Home](/) [Services](/services) [Contact](/contact)"
-    FOOTER = "© 2026 Acme Hydraulics · 12 Main St · 555-0100"
+        a = " ".join("word%d" % i for i in range(300))
+        b = a.replace("word150", "changed")                   # one word in 300
+        c = " ".join("other%d" % i for i in range(300))
+        seen = text.NearDuplicates()
+        self.assertFalse(seen.check(text.minhash(a)))
+        seen.keep(text.minhash(a))
+        self.assertTrue(seen.check(text.minhash(b)))
+        self.assertFalse(seen.check(text.minhash(c)))
+        self.assertEqual(text.minhash(a), text.minhash(a))    # stable, so a resumed crawl agrees
 
     def page(self, body):
         return f"{self.NAV}\n\n{body}\n\n{self.FOOTER}\n"
 
-    def test_repetition_fallback_strips_and_keeps_once(self):
-        pages = [self.page(f"# Page {i}\n\nUnique content number {i} about heat pumps.") for i in range(6)]
-        cleaned, common = text.strip_common_lines(pages)
-        for i, md in enumerate(cleaned):
-            self.assertIn(f"Unique content number {i}", md)
-            self.assertNotIn("555-0100", md)
-        self.assertEqual(common, [self.NAV, self.FOOTER])
-        shared = "We are licensed and insured."
-        pages = [self.page(f"# P{i}\n\n{shared if i < 2 else 'Other text ' + str(i)}") for i in range(6)]
-        self.assertIn(shared, text.strip_common_lines(pages)[0][0])
-        self.assertEqual(text.strip_common_lines([self.page('b')] * 3)[1], [])
+    def test_repeated_lines_are_furniture_on_most_pages_only(self):
+        from ttcrawl.site import repeated_lines
 
-    def test_threshold(self):
-        self.assertEqual(text.boilerplate_threshold(4), 3)
-        self.assertEqual(text.boilerplate_threshold(30), 10)
+        def blocks(*texts):
+            return [{"tag": "p", "text": t, "chrome": False} for t in texts]
+        bar = "24/7 emergency line 555-0100"
+        pages = [blocks(bar, f"Unique content number {i} about heat pumps.") for i in range(6)]
+        self.assertEqual(repeated_lines(pages), {bar})
+        shared = "We are licensed and insured."             # on 2 of 6 pages: content
+        pages = [blocks(bar, shared if i < 2 else "Other text %d" % i) for i in range(6)]
+        self.assertNotIn(text.norm_line(shared), repeated_lines(pages))
+        self.assertEqual(repeated_lines([blocks(bar)] * 2), set())   # too few pages to tell
 
-    def test_strip_lines_and_html_to_text(self):
-        self.assertEqual(text.strip_lines("keep\nDrop Me\nkeep2\n", {"drop me"}), "keep\nkeep2\n")
+    def test_html_to_text(self):
         t = text.html_to_text("<p>Hi</p><script>evil()</script><style>x{}</style><div>There &amp; back</div>")
         self.assertIn("Hi", t)
         self.assertIn("There & back", t)

@@ -8,9 +8,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fixtures import BUSINESS_PAGE, NO_LANDMARKS_PAGE  # noqa: E402
 from ttcrawl import inventory, structured  # noqa: E402
-from ttcrawl.furniture import landmark_line_set, page_furniture, site_furniture  # noqa: E402
+from ttcrawl.furniture import page_furniture, site_furniture  # noqa: E402
 from ttcrawl.html import parse_page  # noqa: E402
-from ttcrawl.media import build_media, guess_kind  # noqa: E402
+from ttcrawl.media import Media, guess_kind  # noqa: E402
 
 URL = "https://acme.com/"
 
@@ -88,10 +88,11 @@ class FurnitureTests(unittest.TestCase):
         self.assertTrue(s["has_landmarks"])
         self.assertEqual(s["from"], URL)
         self.assertEqual(s["pages_with_a_different_nav"], ["https://acme.com/about"])
-        lines = landmark_line_set([self.p])
-        self.assertIn("privacy policy", lines)
-        self.assertIn("call us", lines)
-        self.assertNotIn("we fix roofs across leeds. see our", lines)
+        chrome = {b["text"] for b in self.p["blocks"] if b["chrome"]}
+        content = {b["text"] for b in self.p["blocks"] if not b["chrome"]}
+        self.assertTrue(any("Privacy policy" in t for t in chrome))
+        self.assertTrue(any("Call us" in t for t in chrome))
+        self.assertTrue(any(t.startswith("We fix roofs across Leeds") for t in content))
 
     def test_no_landmarks(self):
         p = parse_page(NO_LANDMARKS_PAGE, "https://old.com/")
@@ -136,15 +137,25 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(guess_kind({"src": "https://a.com/wp-content/themes/x/bg-pattern.png", "alt": ""}), "theme")
         self.assertEqual(guess_kind({"src": "https://a.com/uploads/crew.jpg", "alt": "crew"}), "photo")
 
-    def test_build_media(self):
+    def test_media_one_picture_across_its_sizes(self):
         p = parse_page(BUSINESS_PAGE, URL)
-        media = build_media([(URL, p["images"]), ("https://acme.com/about", p["images"])], "https://acme.com/img/logo.svg")
-        by = {m["url"]: m for m in media}
-        crew = by["https://acme.com/img/crew-800x600.jpg"]
-        self.assertEqual(crew["pages"], [URL, "https://acme.com/about"])
-        self.assertEqual(crew["largest"], "https://acme.com/img/crew-1600x1200.jpg")
-        self.assertEqual(crew["guess"], "photo")
-        self.assertEqual(by["https://acme.com/img/logo.svg"]["guess"], "logo")
+        media = Media()
+        media.add_page(URL, p["blocks"], p["images"])
+        media.add_page("https://acme.com/about", p["blocks"], p["images"])
+        media.classify("https://acme.com/img/logo.svg")
+        crew = media.items["acme.com/img/crew.jpg"]
+        self.assertEqual([x["url"] for x in crew["pages"]], [URL, "https://acme.com/about"])
+        self.assertEqual(crew["pages"][0]["heading"], "Roofs that last")
+        self.assertEqual(Media.candidates(crew)[:2], ["https://acme.com/img/crew.jpg", "https://acme.com/img/crew-1600x1200.jpg"])
+        self.assertEqual(crew["kind"], "photo")
+        self.assertFalse(crew["chrome"])
+        self.assertEqual(media.items["acme.com/img/logo.svg"]["kind"], "logo")
+        chosen = {i["key"] for i in media.select("content")}
+        self.assertIn("acme.com/img/crew.jpg", chosen)
+        self.assertIn("acme.com/img/logo.svg", chosen)
+        self.assertNotIn("acme.com/img/bbb-badge.png", chosen)            # the footer's badge is not content
+        self.assertIn("acme.com/img/bbb-badge.png", {i["key"] for i in media.select("all")})
+        self.assertEqual(media.select("none"), [])
 
 
 class InventoryTests(unittest.TestCase):

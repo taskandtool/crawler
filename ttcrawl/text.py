@@ -2,15 +2,13 @@
 furniture, markdown image handling, a plain html-to-text."""
 import hashlib
 import html as htmlmod
-import math
-import os
 import re
+import zlib
 from urllib.parse import urlsplit
 
 MIN_MARKDOWN_CHARS = 200
 MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 MD_IMAGE_SUB = re.compile(r"(!\[[^\]]*\]\()([^)\s]+)")
-SIZE_SUFFIX_RE = re.compile(r"(-\d{2,4}x\d{2,4}|@\dx|_\d{2,4}x\d{2,4}|-scaled)(?=\.[a-z0-9]{2,5}$)", re.I)
 
 
 def slugify(url):
@@ -35,20 +33,6 @@ def page_name(url, hashed=False):
     return "%s-%s" % (slugify(url)[:70], hashlib.sha1(url.encode()).hexdigest()[:8])
 
 
-def ext_for(url, ctype):
-    for cand in (os.path.splitext(urlsplit(url).path)[1].lstrip("."), ctype.split("/")[-1]):
-        if cand and re.fullmatch(r"[a-z0-9]{2,5}", cand.lower()):
-            return cand.lower().replace("jpeg", "jpg")
-    return "img"
-
-
-def image_key(url):
-    """The identity of an image across its size and format variants."""
-    parts = urlsplit(url)
-    path = SIZE_SUFFIX_RE.sub("", parts.path)
-    return (parts.hostname or "").lower() + path.lower()
-
-
 def rewrite_images(md, local_map):
     """Rewrite each `![alt](url)` whose url is in local_map, touching only
     the url inside an image tag."""
@@ -64,53 +48,54 @@ def shingles(text, k=8):
     return {" ".join(words[i:i + k]) for i in range(max(len(words) - k + 1, 1))}
 
 
-def near_duplicate(text, kept_shingle_sets, threshold=0.9):
-    s = shingles(text)
-    for other in kept_shingle_sets:
-        inter = len(s & other)
-        union = len(s | other) or 1
-        if inter / union >= threshold:
-            return True, s
-    return False, s
+MINHASH_N, MINHASH_BANDS = 64, 16
+_PRIME = (1 << 61) - 1
+_SEEDS = [(int(hashlib.sha1(b"a%d" % i).hexdigest()[:12], 16) | 1, int(hashlib.sha1(b"b%d" % i).hexdigest()[:12], 16))
+          for i in range(MINHASH_N)]
+
+
+def minhash(text):
+    """A 64-number signature of a text's 8-word shingles (pure, stable across
+    runs): the share of numbers two signatures have in common estimates how
+    much of the two texts overlap."""
+    base = [zlib.crc32(s.encode()) for s in shingles(text)]
+    return [min((a * x + b) % _PRIME for x in base) for a, b in _SEEDS]
+
+
+class NearDuplicates:
+    """Pages kept so far, by signature. A new page is a near duplicate when
+    9 in 10 of its signature matches a kept page's; only pages that share a
+    band of the signature are compared, so thousands of pages stay quick."""
+
+    def __init__(self, threshold=0.9):
+        self.threshold, self.signatures, self.buckets = threshold, [], {}
+
+    def _bands(self, sig):
+        rows = MINHASH_N // MINHASH_BANDS
+        return [(i, tuple(sig[i * rows:(i + 1) * rows])) for i in range(MINHASH_BANDS)]
+
+    def check(self, sig):
+        """True when `sig` nearly matches a kept signature (pure over the kept set)."""
+        seen = set()
+        for band in self._bands(sig):
+            for j in self.buckets.get(band, ()):
+                if j in seen:
+                    continue
+                seen.add(j)
+                other = self.signatures[j]
+                if sum(1 for x, y in zip(sig, other) if x == y) / MINHASH_N >= self.threshold:
+                    return True
+        return False
+
+    def keep(self, sig):
+        j = len(self.signatures)
+        self.signatures.append(sig)
+        for band in self._bands(sig):
+            self.buckets.setdefault(band, []).append(j)
 
 
 def norm_line(line):
     return re.sub(r"\s+", " ", line.strip()).lower()
-
-
-def boilerplate_threshold(n_pages):
-    """A line is site furniture when it appears on at least this many pages:
-    a third of the site, never fewer than 3."""
-    return max(3, math.ceil(n_pages / 3))
-
-
-def strip_common_lines(pages, threshold=None):
-    """The repetition fallback for sites without landmarks: remove the lines
-    that repeat across the site, keep each once. Needs 4 or more pages."""
-    if len(pages) < 4:
-        return list(pages), []
-    threshold = threshold or boilerplate_threshold(len(pages))
-    counts, first_seen = {}, {}
-    for md in pages:
-        seen_here = set()
-        for line in md.splitlines():
-            key = norm_line(line)
-            if not key or key in seen_here or re.fullmatch(r"[-*_= ]+", key):
-                continue
-            seen_here.add(key)
-            counts[key] = counts.get(key, 0) + 1
-            first_seen.setdefault(key, line.strip())
-    common = {k for k, c in counts.items() if c >= threshold}
-    cleaned = [strip_lines(md, common) for md in pages]
-    common_lines = [first_seen[k] for k in sorted(common, key=lambda k: list(first_seen).index(k))]
-    return cleaned, common_lines
-
-
-def strip_lines(md, normalized_set):
-    """Remove every line whose normalized form is in the set (pure)."""
-    kept = [line for line in md.splitlines() if norm_line(line) not in normalized_set]
-    text = "\n".join(kept)
-    return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
 
 def html_to_text(html):

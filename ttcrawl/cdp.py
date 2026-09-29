@@ -120,32 +120,45 @@ class WebSocket:
 
 
 class Session:
-    """One page on a browser's CDP endpoint (flattened target session)."""
+    """One page on a browser's CDP endpoint (flattened target session).
+    `on_event(session, event)` sees every event as it arrives (and may answer
+    it with `send`, as the request guard does); the rest wait in `events`."""
 
-    def __init__(self, ws_url, timeout=60):
+    def __init__(self, ws_url, timeout=60, on_event=None):
         self.ws = WebSocket(ws_url, timeout=timeout)
         self.next_id = 0
         self.events = []
+        self.on_event = on_event
         target = self.call("Target.createTarget", {"url": "about:blank"})["targetId"]
         self.session = self.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
         self.target = target
 
-    def call(self, method, params=None, session=True, timeout=60):
+    def send(self, method, params=None, session=True):
+        """A command whose answer nobody waits for; returns its id."""
         self.next_id += 1
         msg = {"id": self.next_id, "method": method, "params": params or {}}
         if session and getattr(self, "session", None):
             msg["sessionId"] = self.session
         self.ws.send(json.dumps(msg))
+        return self.next_id
+
+    def _incoming(self, msg):
+        if "method" in msg:
+            if self.on_event and self.on_event(self, msg):
+                return
+            self.events.append(msg)
+
+    def call(self, method, params=None, session=True, timeout=60):
+        want = self.send(method, params, session)
         self.ws.sock.settimeout(timeout)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             reply = json.loads(self.ws.recv())
-            if reply.get("id") == self.next_id:
+            if reply.get("id") == want:
                 if "error" in reply:
                     raise CDPError("%s: %s" % (method, reply["error"].get("message")))
                 return reply.get("result", {})
-            if "method" in reply:
-                self.events.append(reply)
+            self._incoming(reply)
         raise CDPError("%s timed out" % method)
 
     def wait_event(self, name, timeout=30):
@@ -156,7 +169,7 @@ class Session:
                     return self.events.pop(i)
             self.ws.sock.settimeout(max(0.1, deadline - time.monotonic()))
             try:
-                self.events.append(json.loads(self.ws.recv()))
+                self._incoming(json.loads(self.ws.recv()))
             except socket.timeout:
                 break
         return None
@@ -174,6 +187,44 @@ class Session:
         self.ws.close()
 
 
+class RequestGuard:
+    """For a browser that loads anything (Chrome): every request the page
+    makes is paused, and one to a private, loopback, link-local or reserved
+    address is refused, so the SSRF rail holds for the page, each redirect
+    and every subresource. Obscura refuses those itself."""
+
+    def __init__(self, is_public=None):
+        from . import net
+        self.is_public = is_public or net.is_public_host
+        self.seen, self.refused = {}, []
+
+    def allowed(self, url):
+        from urllib.parse import urlsplit
+        parts = urlsplit(url)
+        if parts.scheme in ("data", "blob", "about"):
+            return True
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return False
+        host = parts.hostname.lower()
+        if host not in self.seen:
+            self.seen[host] = host != "localhost" and not host.endswith((".local", ".internal")) and self.is_public(host)
+        return self.seen[host]
+
+    def enable(self, session):
+        session.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+
+    def __call__(self, session, event):
+        if event["method"] != "Fetch.requestPaused":
+            return False
+        params = event["params"]
+        if self.allowed(params["request"]["url"]):
+            session.send("Fetch.continueRequest", {"requestId": params["requestId"]})
+        else:
+            self.refused.append(params["request"]["url"])
+            session.send("Fetch.failRequest", {"requestId": params["requestId"], "errorReason": "AccessDenied"})
+        return True
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -186,6 +237,7 @@ class Obscura:
     """`obscura serve` on a loopback port for the life of a crawl. Private
     networks stay blocked (Obscura's own default), so the SSRF rail holds for
     the page and every subresource it loads."""
+    engine, needs_guard = "obscura", False
 
     def __init__(self, binary, popen=subprocess.Popen):
         self.port = free_port()
@@ -263,8 +315,11 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIG
                       max_strips=MAX_STRIPS, timeout=45):
     """The whole page as PNG strips `01.png`, `02.png`… under `out_dir`, plus
     `meta.json`. Returns the meta dict, or raises CDPError."""
-    s = Session(browser.ws_url, timeout=timeout)
+    guard = RequestGuard() if getattr(browser, "needs_guard", False) else None
+    s = Session(browser.ws_url, timeout=timeout, on_event=guard)
     try:
+        if guard:
+            guard.enable(s)
         s.call("Page.enable")
         s.call("Emulation.setDeviceMetricsOverride",
                {"width": width, "height": VIEWPORT[1], "deviceScaleFactor": 1, "mobile": False})
@@ -298,7 +353,7 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIG
                 f.write(base64.b64decode(shot["data"]))
             files.append(name)
         meta = {"url": url, "width": width, "height": int(height), "strip_height": strip,
-                "strips": files, "truncated": truncated}
+                "strips": files, "truncated": truncated, "engine": getattr(browser, "engine", "obscura")}
         with open(os.path.join(out_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
         return meta

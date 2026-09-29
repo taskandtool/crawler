@@ -1,7 +1,14 @@
 """One pass over a page's HTML that collects everything the other modules
 need: head metadata, headings, links with the landmark they sit in, images,
-forms, embeds, scripts, JSON-LD and microdata, and the text lines of the
-header, nav, footer, and aside landmarks. Standard-library HTMLParser only.
+forms, embeds, scripts, JSON-LD and microdata, the text lines of the
+header, nav, footer, and aside landmarks, and the page's content as blocks
+in document order (blocks.py writes them as markdown). Standard-library
+HTMLParser only.
+
+The same parser reads a static fetch and a browser render: the render
+annotates what only a browser knows (an image's real size and the source it
+chose, a large CSS background) as data-tt-* attributes, so both paths give
+the same blocks.
 """
 import html as htmlmod
 import re
@@ -23,6 +30,17 @@ LANDMARK_HINTS = {
 LANDMARK_IDS = {"header": "header", "site-header": "header", "masthead": "header", "nav": "nav", "navigation": "nav",
                 "menu": "nav", "footer": "footer", "site-footer": "footer", "colophon": "footer"}
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+# Elements whose text is one block of content. A block inside another (a <p>
+# inside an <li>) reports on its own; the outer keeps only its own text.
+BLOCK_TAGS = HEADING_TAGS | {"p", "li", "blockquote", "td", "th", "dt", "dd", "figcaption", "pre"}
+# Elements that end a run of loose text: page builders put copy straight into
+# <div>s and <span>s, and a run between two of these is a paragraph.
+BREAK_TAGS = {"div", "section", "article", "main", "header", "footer", "nav", "aside", "form", "table", "tr",
+              "ul", "ol", "dl", "figure", "br", "hr", "body", "button", "label", "select", "option", "iframe"}
+SKIP_TEXT_TAGS = {"script", "style", "noscript", "template", "svg", "head", "title", "button", "select", "option"}
+VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+ICON_SRC_RE = re.compile(r"\.svg(\?|$)|icon|sprite|logo|favicon|spinner|loader|pixel|spacer|blank\.gif", re.I)
+MIN_BLOCK_IMAGE_PX = 400
 SOCIAL_HOSTS = ("facebook.com", "instagram.com", "linkedin.com", "twitter.com", "x.com", "youtube.com",
                 "tiktok.com", "pinterest.com", "threads.net", "yelp.com", "nextdoor.com", "g.page",
                 "maps.google.com", "goo.gl", "tripadvisor.com", "houzz.com", "angi.com", "bbb.org")
@@ -62,12 +80,22 @@ class PageParser(HTMLParser):
         self._item_stack = []      # microdata items
         self._itemprop = None      # (name, chars) while collecting itemprop text
         self._in_noscript = 0
+        self._main_depth = 0       # inside <main>, <article>, or role=main
+        # content blocks, in document order: dicts tag, text, chrome, [href], [src, alt]
+        self.blocks = []
+        self._open_blocks = []     # [index into self.blocks, pieces] for each open block element
+        self._loose = None         # [index, pieces] for a run of text outside any block
+        self._skip_depth = 0       # inside script/style/svg/hidden: no block text
+        self._link_marks = []      # (block index, piece count, href) per open <a>
+        self.videos = []           # video files the page plays (an mp4 first when a <video> offers several)
 
     # ── helpers ──
     def _classes(self, a):
         return set((a.get("class") or "").lower().split()) | ({a.get("id", "").lower()} if a.get("id") else set())
 
     def _landmark_for(self, tag, a):
+        if tag in ("header", "footer") and self._main_depth and not a.get("role"):
+            return None            # an article's own header (headline, byline, date), not the site's
         if tag in LANDMARK_TAGS:
             return LANDMARK_TAGS[tag]
         role = (a.get("role") or "").lower()
@@ -87,19 +115,162 @@ class PageParser(HTMLParser):
     def landmark(self):
         return self.landmark_stack[-1] if self.landmark_stack else None
 
+    def _srcset(self, srcset):
+        """[(url, width)] from a srcset; a density (2x) counts as width 0."""
+        out = []
+        for part in (srcset or "").split(","):
+            bits = part.strip().split()
+            if bits and not bits[0].startswith("data:"):
+                w = _int(bits[1][:-1]) if len(bits) > 1 and bits[1].endswith("w") else 0
+                out.append((self._abs(bits[0]), w or 0))
+        return out
+
     def _abs(self, href):
         return urljoin(self.base, htmlmod.unescape(href).strip())
 
+    # ── blocks ──
+    def _chrome(self):
+        return self.landmark is not None
+
+    def _new_block(self, tag, **extra):
+        self.blocks.append(dict(tag=tag, text="", chrome=self._chrome(), **extra))
+        return len(self.blocks) - 1
+
+    def _end_loose(self):
+        if self._loose is not None:
+            self._finish(self._loose)
+            self._loose = None
+
+    def _finish(self, entry):
+        index, pieces = entry
+        self.blocks[index]["text"] = _squash_lines("".join(pieces))
+
+    def _text_sink(self):
+        """The pieces list new text goes into: the innermost open block, else a
+        run of loose text (opened on demand)."""
+        if self._open_blocks:
+            return self._open_blocks[-1]
+        if self._loose is None:
+            self._loose = [self._new_block("p"), []]
+        return self._loose
+
+    def _block_start(self, tag, a):
+        if self._skip_depth:
+            return
+        if tag in BREAK_TAGS or tag in BLOCK_TAGS:
+            self._end_loose()
+        if tag in BLOCK_TAGS:
+            self._open_blocks.append([self._new_block(tag), []])
+        elif tag == "br" and self._open_blocks:
+            self._open_blocks[-1][1].append("\n")
+        elif tag == "img":
+            self._end_loose()
+            src = a.get("data-tt-src") or a.get("src") or a.get("data-src") or a.get("data-lazy-src") or ""
+            width = _int(a.get("data-tt-w")) or _int(a.get("width"))
+            if src and not src.startswith("data:") and not ICON_SRC_RE.search(src) \
+                    and not (width and width < MIN_BLOCK_IMAGE_PX):
+                self._new_block("img", src=self._abs(src), alt=htmlmod.unescape(a.get("alt") or "").strip(),
+                                srcset=self._srcset(a.get("srcset") or a.get("data-srcset") or ""))
+        if a.get("data-tt-bg"):
+            self._end_loose()
+            self._new_block("img", src=a["data-tt-bg"], alt="", background=True)
+        if tag == "a" and a.get("href"):
+            sink = self._text_sink()
+            if sink[1] and sink[1][-1].startswith("[") and sink[1][-1].endswith(")"):
+                sink[1].append(" ")            # two links side by side stay two
+            self._link_marks.append((sink[0], len(sink[1]), self._abs(a["href"]), len(self.blocks)))
+        elif tag == "a":
+            self._link_marks.append(None)
+
+    def _block_end(self, tag):
+        if self._skip_depth:
+            return
+        if tag == "a" and self._link_marks:
+            mark = self._link_marks.pop()
+            if mark:
+                index, at, href, first_new = mark
+                sink = self._open_blocks[-1] if self._open_blocks else self._loose
+                if sink is not None and sink[0] == index:
+                    text = _squash("".join(sink[1][at:]))
+                    if text and href.startswith(("http://", "https://", "mailto:", "tel:")):
+                        sink[1][at:] = ["[%s](%s)" % (text.replace("]", ")"), href)]
+                else:
+                    # a link around whole blocks (a card): its headings carry the target
+                    for b in self.blocks[first_new:]:
+                        if b["tag"] in HEADING_TAGS and "href" not in b and href.startswith(("http://", "https://")):
+                            b["href"] = href
+        if tag in BLOCK_TAGS and self._open_blocks and self.blocks[self._open_blocks[-1][0]]["tag"] == tag:
+            self._finish(self._open_blocks.pop())
+        elif tag in BREAK_TAGS:
+            self._end_loose()
+
+    def _block_text(self, data):
+        if self._skip_depth or self._text_target in ("script", "jsonld", "title"):
+            return
+        if not self._open_blocks and self._loose is None and not data.strip():
+            return
+        sink = self._text_sink()
+        # two elements that meet with no space ("thinking.”</span><span>by"):
+        # after closing punctuation, a word starts a new phrase
+        if sink[1] and data[:1].isalnum() and sink[1][-1][-1:] in '.!?”"):':
+            sink[1].append(" ")
+        sink[1].append(data)
+
+    def blocks_out(self):
+        """The finished blocks: empty ones dropped, and a repeat of the same
+        block dropped too (a carousel shows its slides twice), except a short
+        line with a figure in it, which belongs to the item beside it (two news
+        items can share "Published on 12 May 2026")."""
+        for entry in self._open_blocks:
+            self._finish(entry)
+        self._end_loose()
+        out, seen = [], set()
+        here = urlsplit(self.base)._replace(fragment="").geturl()
+        for b in self.blocks:
+            # a skip link ("Skip to content" -> #content) is the page's plumbing
+            m = re.fullmatch(r"\[[^\]]*\]\(([^)]*)#[^)]*\)", b.get("text") or "")
+            if m and (not m.group(1) or m.group(1) == here):
+                continue
+            if b["tag"] == "img":
+                key = "img|" + b["src"]
+            else:
+                if not b["text"]:
+                    continue
+                key = b["tag"] + "|" + b["text"]
+                if key in seen and re.search(r"\d", b["text"]) and len(b["text"]) < 60:
+                    out.append(b)
+                    continue
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(b)
+        return out
+
     # ── parsing ──
+    def handle_startendtag(self, tag, attrs):
+        # <br/>, <img/>: a void element opens and closes at once
+        self.handle_starttag(tag, attrs)
+        if tag not in VOID_TAGS:
+            self.handle_endtag(tag)
+
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        void = tag in VOID_TAGS
+        hides = not void and (tag in SKIP_TEXT_TAGS or "hidden" in a or (a.get("aria-hidden") or "").lower() == "true")
+        mains = not void and (tag in ("main", "article") or (a.get("role") or "").lower() == "main")
         lm = self._landmark_for(tag, a)
-        self.stack.append((tag, lm))
-        if lm:
+        if not void:
+            self.stack.append((tag, lm, hides, mains))
+        if hides:
+            self._skip_depth += 1
+        if mains:
+            self._main_depth += 1
+        if lm and not void:
             self.landmark_stack.append(lm)
             self.landmark_lines.setdefault(lm, [])
             self.list_depth = 0
             self._current_group = None
+        self._block_start(tag, a)
         if tag == "noscript":
             self._in_noscript += 1
         if tag == "html" and a.get("lang"):
@@ -126,6 +297,7 @@ class PageParser(HTMLParser):
             self.images.append({
                 "src": self._abs(src) if src else "",
                 "srcset": [self._abs(p.strip().split()[0]) for p in srcset.split(",") if p.strip()],
+                "srcset_w": self._srcset(srcset),
                 "alt": htmlmod.unescape(a.get("alt") or "").strip(),
                 "width": _int(a.get("width")), "height": _int(a.get("height")),
                 "landmark": self.landmark, "in_link": self._link_text is not None,
@@ -143,6 +315,11 @@ class PageParser(HTMLParser):
             elif typ not in ("hidden", "submit", "button", "reset") or tag == "button":
                 self._current_form["fields"].append({"name": a.get("name") or "", "type": typ,
                                                      "required": "required" in a})
+        elif tag in ("video", "source") and (a.get("src") or a.get("data-src")) and \
+                (tag == "video" or any(t[0] == "video" for t in self.stack)):
+            src = self._abs(a.get("src") or a.get("data-src"))
+            if not src.startswith(("data:", "blob:")) and src not in self.videos:
+                self.videos.append(src)
         elif tag == "iframe" and (a.get("src") or a.get("data-src")):
             self.iframes.append(self._abs(a.get("src") or a.get("data-src")))
         elif tag == "script":
@@ -168,6 +345,7 @@ class PageParser(HTMLParser):
                 self._itemprop = (name, [])
 
     def handle_endtag(self, tag):
+        self._block_end(tag)
         if tag in ("ul", "ol") and self.landmark and self.list_depth:
             self.list_depth -= 1
         if tag == "title":
@@ -185,6 +363,7 @@ class PageParser(HTMLParser):
             text = _squash("".join(self._link_text))
             if a.get("href"):
                 self.links.append({"href": self._abs(a["href"]), "text": text, "landmark": self.landmark,
+                                   "in_main": bool(self._main_depth),
                                    "depth": self.list_depth, "group": self._current_group,
                                    "classes": sorted(self._classes(a)), "rel": (a.get("rel") or "").lower()})
             self._link_text = None
@@ -209,10 +388,14 @@ class PageParser(HTMLParser):
             if self.stack[i][0] == tag:
                 popped = self.stack[i:]
                 del self.stack[i:]
-                for _, lm in popped:
+                for _, lm, hides, mains in popped:
                     if lm and self.landmark_stack:
                         self.landmark_stack.pop()
                         self._current_group = None
+                    if hides and self._skip_depth:
+                        self._skip_depth -= 1
+                    if mains and self._main_depth:
+                        self._main_depth -= 1
                 while self._item_stack and self._item_stack[-1][0] > len(self.stack):
                     self._item_stack.pop()
                 break
@@ -224,6 +407,7 @@ class PageParser(HTMLParser):
             self.handle_endtag("a")
 
     def handle_data(self, data):
+        self._block_text(data)
         if self._text_target == "title":
             self.title += data
         elif self._text_target == "heading" and self._heading:
@@ -253,6 +437,12 @@ def _int(v):
 
 def _squash(text):
     return re.sub(r"\s+", " ", htmlmod.unescape(text or "")).strip()
+
+
+def _squash_lines(text):
+    """_squash, keeping the line breaks a <br> made (an address, a list of hours)."""
+    lines = [_squash(line) for line in (text or "").split("\n")]
+    return "\n".join(line for line in lines if line)
 
 
 def parse_page(html, url):
@@ -295,4 +485,6 @@ def parse_page(html, url):
         "landmark_lines": p.landmark_lines,
         "body_word_count": sum(len(re.findall(r"\w+", t)) for t in p.body_text),
         "has_landmarks": bool(p.landmark_lines),
+        "blocks": p.blocks_out(),
+        "videos": sorted(p.videos, key=lambda v: not re.search(r"\.mp4(\?|$)", v, re.I)),
     }

@@ -1,7 +1,6 @@
 """The crawl loop end to end on fake responses (no network, no browser):
 throttled answers waited out, thin pages kept, a re-crawl refreshing pages
 in place; and the full-page screenshot plumbing on fakes."""
-import argparse
 import json
 import os
 import socket
@@ -23,16 +22,22 @@ PAGES = {
 }
 
 
+SITEMAPS = {}
+
+
 def response(url, status=200, body=b"", headers=None):
     return {"status": status, "final_url": url, "chain": [], "headers": headers or {}, "body": body, "truncated": False}
 
 
-def args_for(out, **kw):
-    a = dict(start_url="https://acme.com/", out=out, structured_out=None, max_pages=100, max_images=0, delay=0.0,
-             static=True, screenshots=False, styles=False, style_pages=5, keep_boilerplate=False,
-             ignore_robots=True, no_sitemap=True)
-    a.update(kw)
-    return argparse.Namespace(**a)
+def args_for(out, command="site", urls=("https://acme.com/",), sitemap=False, **kw):
+    """The arguments the real command line builds, with test overrides."""
+    from ttcrawl import cli
+    argv = [command, *urls, "--out", out, "--max-images", "0", "--delay", "0", "--static",
+            "--ignore-robots"] + (["--no-sitemap"] if command != "add" and not sitemap else [])
+    args = cli.build_parser().parse_args(argv)
+    for k, v in kw.items():
+        setattr(args, k, v)
+    return args
 
 
 def read(path):
@@ -54,7 +59,7 @@ class CrawlHarness(unittest.TestCase):
             if self.throttle_left.get(url):
                 self.throttle_left[url] -= 1
                 return response(url, 429, headers={"retry-after": "0"})
-            html = PAGES.get(url)
+            html = PAGES.get(url) or SITEMAPS.get(url)
             if html is None:
                 return response(url, 404)
             return response(url, body=b"" if method == "HEAD" else html.encode(), headers={})
@@ -64,7 +69,7 @@ class CrawlHarness(unittest.TestCase):
     def tearDown(self):
         net.fetch_once, net.is_public_host, site.time.sleep, net.time.sleep = self.saved
 
-    def crawl(self, out, **kw):
+    def crawl(self, out, command="site", urls=("https://acme.com/",), sitemap=False, expect=0, **kw):
         # fetch() binds time.sleep as its default; route retries through a recorder
         real_fetch = net.fetch
 
@@ -75,11 +80,12 @@ class CrawlHarness(unittest.TestCase):
         try:
             buf = StringIO()
             with redirect_stdout(buf), redirect_stderr(StringIO()):
-                code = site.run(args_for(out, **kw))
+                args = args_for(out, command, urls, sitemap, **kw)
+                code = args.func(args)
         finally:
             net.fetch = real_fetch
-        self.assertEqual(code, 0)
-        return json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertEqual(code, expect)
+        return json.loads(buf.getvalue().strip().splitlines()[-1]) if code == 0 else None
 
 
 class CrawlRunTests(CrawlHarness):
@@ -88,27 +94,27 @@ class CrawlRunTests(CrawlHarness):
             summary = self.crawl(out)
             self.assertEqual(summary["pages"], 3)
             self.assertEqual(summary["thin"], 1)
-            with open(os.path.join(out, "contact.md")) as f:
+            with open(os.path.join(out, "pages", "contact.md")) as f:
                 text = f.read()
-            self.assertIn("<!-- thin:", text)
+            self.assertIn("\nthin: true\n", text)
             self.assertIn("0113 555 0100", text)
-            with open(os.path.join(out, "_inventory.json")) as f:
+            with open(os.path.join(out, "_index", "inventory.json")) as f:
                 inv = json.load(f)
             row = next(r for r in inv["records"] if r["url"] == "https://acme.com/contact")
             self.assertTrue(row["thin"])
-            self.assertEqual(row["file"], "contact.md")
+            self.assertEqual(row["file"], "pages/contact.md")
 
     def test_recrawl_refreshes_in_place(self):
         with tempfile.TemporaryDirectory() as out:
             self.crawl(out)
-            first = sorted(f for f in os.listdir(out) if f.endswith(".md"))
+            first = sorted(os.listdir(os.path.join(out, "pages")))
             PAGES["https://acme.com/services"] = PAGES["https://acme.com/services"].replace("same day", "same hour")
             try:
                 self.crawl(out)
             finally:
                 PAGES["https://acme.com/services"] = PAGES["https://acme.com/services"].replace("same hour", "same day")
-            self.assertEqual(sorted(f for f in os.listdir(out) if f.endswith(".md")), first)
-            with open(os.path.join(out, "services.md")) as f:
+            self.assertEqual(sorted(os.listdir(os.path.join(out, "pages"))), first)
+            with open(os.path.join(out, "pages", "services.md")) as f:
                 self.assertIn("same hour", f.read())
 
     def test_recrawl_with_a_smaller_limit_keeps_earlier_files(self):
@@ -117,10 +123,10 @@ class CrawlRunTests(CrawlHarness):
             summary = self.crawl(out, max_pages=1)
             self.assertEqual(summary["pages"], 1)
             self.assertEqual(summary["earlier_kept"], 2)
-            self.assertTrue(os.path.isfile(os.path.join(out, "contact.md")))
+            self.assertTrue(os.path.isfile(os.path.join(out, "pages", "contact.md")))
             # and a third run still knows their names
             self.crawl(out)
-            self.assertFalse([f for f in os.listdir(out) if f.endswith("-1.md")])
+            self.assertFalse([f for f in os.listdir(os.path.join(out, "pages")) if f.endswith("-1.md")])
 
     def test_throttled_page_is_waited_out(self):
         self.throttle_left["https://acme.com/services"] = 2
@@ -137,9 +143,80 @@ class CrawlRunTests(CrawlHarness):
             summary = self.crawl(out)
             self.assertEqual(summary["pages"], 2)
             self.assertEqual(len(self.sleeps), net.MAX_RETRIES)
-            with open(os.path.join(out, "_manifest.json")) as f:
+            with open(os.path.join(out, "_index", "manifest.json")) as f:
                 manifest = json.load(f)
             self.assertIn({"url": "https://acme.com/services", "reason": "http_429"}, manifest["skipped"])
+
+
+class SurveyTests(CrawlHarness):
+    """A site with a blog of eight posts its sitemap lists as posts."""
+    POSTS = ["https://acme.com/%s-tips" % w for w in ("roof", "gutter", "slate", "tile", "chimney", "skylight", "flat", "storm")]
+
+    def setUp(self):
+        super().setUp()
+        self.saved_pages = dict(PAGES)
+        for i, u in enumerate(self.POSTS):
+            PAGES[u] = f"<html><body><main><h1>Post {i}</h1><p>12 May 2026</p><p>{LONG} Post number {i}.</p></main></body></html>"
+        SITEMAPS["https://acme.com/sitemap.xml"] = ("<sitemapindex><sitemap><loc>https://acme.com/post-sitemap.xml</loc></sitemap>"
+                                                    "<sitemap><loc>https://acme.com/page-sitemap.xml</loc></sitemap></sitemapindex>")
+        SITEMAPS["https://acme.com/post-sitemap.xml"] = "<urlset>%s</urlset>" % "".join(
+            "<url><loc>%s</loc></url>" % u for u in self.POSTS)
+        SITEMAPS["https://acme.com/page-sitemap.xml"] = "<urlset><url><loc>https://acme.com/about-us</loc></url></urlset>"
+        PAGES["https://acme.com/about-us"] = f"<html><body><main><h1>About</h1><p>{LONG.replace('roofers', 'people')}</p></main></body></html>"
+
+    def tearDown(self):
+        PAGES.clear()
+        PAGES.update(self.saved_pages)
+        SITEMAPS.clear()
+        super().tearDown()
+
+    def test_survey_reads_two_posts_and_lists_the_rest(self):
+        with tempfile.TemporaryDirectory() as out:
+            summary = self.crawl(out, command="survey", sitemap=True)
+            with open(os.path.join(out, "_index", "templates.json")) as f:
+                post = next(t for t in json.load(f) if t["template"] == "post")
+            self.assertEqual((post["count"], post["read"], post["not_read"]), (8, 2, 6))
+            self.assertEqual(len(post["shapes"]), 1)
+            self.assertIn("| post | 8 | 2 | 6 |", read(os.path.join(out, "_index", "templates.md")))
+            with open(os.path.join(out, "_index", "run.json")) as f:
+                run = json.load(f)
+            self.assertEqual(run["not_fetched_by_template"], {"post": 6})
+            self.assertEqual(run["profile"], "survey")
+            self.assertTrue(os.path.isfile(os.path.join(out, "pages", "about-us.md")))   # a page is read, not sampled
+            self.assertEqual(summary["collections"], 1)
+
+    def test_the_nav_is_read_before_the_sitemap(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.crawl(out, sitemap=True, max_pages=3)
+            with open(os.path.join(out, "_index", "manifest.json")) as f:
+                order = [p["url"] for p in json.load(f)["pages"]]
+            self.assertEqual(order, ["https://acme.com/", "https://acme.com/services", "https://acme.com/contact"])
+
+    def test_add_reads_one_more_and_writes_it_all_again(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.crawl(out, command="survey", sitemap=True)
+            unread = next(u for u in self.POSTS if not os.path.isfile(os.path.join(out, "pages", u.rsplit("/", 1)[1] + ".md")))
+            summary = self.crawl(out, command="add", urls=(unread,))
+            self.assertTrue(os.path.isfile(os.path.join(out, "pages", unread.rsplit("/", 1)[1] + ".md")))
+            self.assertEqual((summary["new"], summary["changed"]), (1, 0))
+            with open(os.path.join(out, "_index", "templates.json")) as f:
+                post = next(t for t in json.load(f) if t["template"] == "post")
+            self.assertEqual((post["read"], post["not_read"]), (3, 5))
+
+    def test_add_needs_a_crawl_first(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.assertIsNone(self.crawl(out, command="add", urls=("https://acme.com/about-us",), expect=2))
+
+    def test_frontmatter_and_changes_between_runs(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.crawl(out)
+            text = read(os.path.join(out, "pages", "services.md"))
+            self.assertTrue(text.startswith('---\nurl: "https://acme.com/services"\ntitle: "Services"\ntemplate: "/services"\n'))
+            self.assertIn('fetcher: "static"', text)
+            again = self.crawl(out)
+            self.assertEqual((again["new"], again["changed"]), (0, 0))
+            PAGES["https://acme.com/services"] = PAGES["https://acme.com/services"].replace("same day", "same hour")
+            self.assertEqual(self.crawl(out)["changed"], 1)
 
 
 class NameTests(unittest.TestCase):
@@ -175,22 +252,23 @@ class CollisionTests(CrawlHarness):
     def test_each_url_its_own_files(self):
         with tempfile.TemporaryDirectory() as out:
             self.crawl(out)
-            self.assertIn("Post one", read(os.path.join(out, "blog--post.md")))
-            self.assertIn("Post two", read(os.path.join(out, "blog-post.md")))
-            structured = os.listdir(os.path.join(out, "_structured"))
+            self.assertIn("Post one", read(os.path.join(out, "pages", "blog--post.md")))
+            self.assertIn("Post two", read(os.path.join(out, "pages", "blog-post.md")))
+            structured = os.listdir(os.path.join(out, "structured"))
             self.assertIn("blog--post.json", structured)
             self.assertIn("blog-post.json", structured)
 
     def test_an_earlier_name_is_kept_and_never_taken(self):
         with tempfile.TemporaryDirectory() as out:
-            # a 0.1.3 run wrote /blog/post as blog-post.md
-            with open(os.path.join(out, "_manifest.json"), "w") as f:
-                json.dump({"pages": [{"url": "https://acme.com/blog/post", "file": "blog-post.md"}]}, f)
+            # an earlier run wrote /blog/post as blog-post.md
+            os.makedirs(os.path.join(out, "_index"))
+            with open(os.path.join(out, "_index", "manifest.json"), "w") as f:
+                json.dump({"pages": [{"url": "https://acme.com/blog/post", "file": "pages/blog-post.md"}]}, f)
             self.crawl(out)
-            self.assertIn("Post one", read(os.path.join(out, "blog-post.md")))
-            others = [f for f in os.listdir(out) if f.startswith("blog-post-") and f.endswith(".md")]
+            self.assertIn("Post one", read(os.path.join(out, "pages", "blog-post.md")))
+            others = [f for f in os.listdir(os.path.join(out, "pages")) if f.startswith("blog-post-")]
             self.assertEqual(len(others), 1)                 # /blog-post hashed, not overwriting
-            self.assertIn("Post two", read(os.path.join(out, others[0])))
+            self.assertIn("Post two", read(os.path.join(out, "pages", others[0])))
 
 
 class BackoffTests(unittest.TestCase):

@@ -11,7 +11,7 @@ import sys
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
-from . import net
+from . import net, paths
 from .text import slugify
 
 MAX_DOC_BYTES = 25 * 1024 * 1024
@@ -48,16 +48,22 @@ def convert(path):
 
 
 def run(args):
-    inventory_path = os.path.join(args.from_dir, "_inventory.json")
+    args.from_dir = args.from_dir or paths.the_site()
+    if not args.from_dir:
+        sys.stderr.write("docs needs --from: the crawl folder (raw/site/<host>) whose pages link the documents\n")
+        return 2
+    args.out = args.out or os.path.join(args.from_dir, paths.DOCS)
+    inventory_path = paths.ledger(args.from_dir, "inventory.json")
     docs = linked_documents(inventory_path, args.from_dir)
     for u in args.urls or []:
         docs.setdefault(u, None)
     if not docs:
+        paths.register_site(args.from_dir, {"docs_fetched": True, "docs": 0})
         print(json.dumps({"documents": 0, "note": "no documents linked from %s" % args.from_dir}))
         return 0
     root_host = None
     try:
-        with open(os.path.join(args.from_dir, "_manifest.json")) as f:
+        with open(paths.ledger(args.from_dir, "manifest.json")) as f:
             root_host = urlsplit(json.load(f).get("start", "")).hostname
     except (OSError, ValueError):
         pass
@@ -114,6 +120,7 @@ def run(args):
         written += 1
     with open(index_path, "w") as f:
         json.dump(index, f, indent=2)
+    paths.register_site(args.from_dir, {"docs_fetched": True, "docs": len(index)})
     print(json.dumps({"documents": written, "skipped": len(skipped), "unconverted": sum(1 for d in index if not d["converted"]),
                       "out": args.out, "skipped_reasons": skipped[:20]}))
     return 0
@@ -133,7 +140,7 @@ def _date(url):
 def add_parser(sub):
     p = sub.add_parser("docs", help="the documents linked from the crawled pages, converted to markdown")
     p.add_argument("urls", nargs="*", help="extra document URLs to fetch")
-    p.add_argument("--from", dest="from_dir", default="raw/web", help="the crawl to read the links from")
-    p.add_argument("--out", default="raw/docs")
+    p.add_argument("--from", dest="from_dir", default=None, help="the crawl to read the links from (default: the one raw/site/<host>)")
+    p.add_argument("--out", default=None, help="default <from>/docs")
     p.add_argument("--allow-external", action="store_true", help="also fetch documents on other hosts")
     p.set_defaults(func=run)

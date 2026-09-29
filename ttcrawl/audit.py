@@ -15,8 +15,8 @@ what a site owner should fix:
     JSON-LD that does not parse
     oversized pages (over 1 MB of HTML)
 
-    tt-crawl audit https://theirdomain.com --out raw/web/_audit.md [--max-pages 200]
-                   [--inventory raw/web/_inventory.json]   # also the old URLs, as `check` does
+    tt-crawl audit https://theirdomain.com [--out raw/audit/<host>/<date>.md] [--max-pages 200]
+                   [--inventory raw/site/<host>/_index/inventory.json]   # also the old URLs, as `check` does
                    [--external-limit 100] [--no-external]
 
 Writes a markdown report (with an "## Issues" section only when there are
@@ -31,7 +31,7 @@ import time
 from collections import Counter
 from urllib.parse import urljoin, urlsplit
 
-from . import net
+from . import net, paths
 from .a11y import findings as a11y_findings
 from .html import parse_page
 from .site import parse_sitemap
@@ -256,6 +256,7 @@ def run(args):
     if not net.public_http_url(args.site_url) and not args.site_url.startswith(("http://localhost", "http://127.0.0.1")):
         print(json.dumps({"ok": False, "error": "not a public http(s) url"}))
         return 2
+    args.out = args.out or os.path.join(paths.audit_dir(args.site_url), paths.today() + ".md")
     inventory = None
     if args.inventory and os.path.isfile(args.inventory):
         with open(args.inventory) as fh:
@@ -267,6 +268,10 @@ def run(args):
         fh.write(markdown(report))
     with open(os.path.splitext(args.out)[0] + ".json", "w") as fh:
         json.dump(report, fh, indent=2)
+    if not args.no_register:
+        paths.register_report(args.out, "_latest.json", {"host": paths.host_of(args.site_url), "site": args.site_url,
+                                                         "updated": paths.today(), "ok": not report["issues"],
+                                                         "issues": len(report["issues"])})
     summary = {"ok": not report["issues"], "site": args.site_url, "pages": report["pages"], "issues": len(report["issues"]),
                "by_kind": dict(Counter(i["kind"] for i in report["issues"])), "out": args.out}
     print(json.dumps(summary))
@@ -276,10 +281,11 @@ def run(args):
 def add_parser(sub):
     p = sub.add_parser("audit", help="the weekly health check of a live site: broken links, SEO basics, sitemap drift")
     p.add_argument("site_url")
-    p.add_argument("--out", default="raw/web/_audit.md")
+    p.add_argument("--out", default=None, help="default raw/audit/<host>/<date>.md (a report; it never touches pages)")
     p.add_argument("--max-pages", type=int, default=200)
     p.add_argument("--inventory", default="", help="also check the old URLs from this inventory")
     p.add_argument("--external-limit", type=int, default=100)
     p.add_argument("--no-external", action="store_true")
     p.add_argument("--delay", type=float, default=0.0)
+    p.add_argument("--no-register", action="store_true", help="don't record it as the host's latest audit (raw/audit/_latest.json)")
     p.set_defaults(func=run)

@@ -45,6 +45,48 @@ EVAL_JS = r"""
 """
 
 
+# One render per page: mark on the page what only a browser knows, as
+# data-tt-* attributes the parser reads (an image's real width and the source
+# it chose among its sizes; a large element's CSS background), then hand back
+# the rendered HTML, and the computed styles when asked (STYLES).
+EXTRACT_JS = r"""
+(() => {
+  for (const img of document.images) {
+    if (img.currentSrc) img.setAttribute("data-tt-src", img.currentSrc);
+    if (img.naturalWidth) { img.setAttribute("data-tt-w", img.naturalWidth); img.setAttribute("data-tt-h", img.naturalHeight); }
+  }
+  const all = document.body ? document.body.querySelectorAll("*") : [];
+  for (let i = 0; i < all.length && i < 6000; i++) {
+    const el = all[i], bg = getComputedStyle(el).backgroundImage;
+    if (!bg || bg === "none") continue;
+    const m = bg.match(/url\(["']?([^"')]+)["']?\)/); if (!m) continue;
+    const r = el.getBoundingClientRect(); if (r.width < 300 || r.height < 200) continue;
+    try { el.setAttribute("data-tt-bg", new URL(m[1], location.href).href); } catch (e) {}
+  }
+  const styles = STYLES ? JSON.parse(STYLES_JS) : null;
+  const doctype = document.doctype ? "<!doctype html>" : "";
+  return JSON.stringify({ html: doctype + document.documentElement.outerHTML, styles });
+})()
+"""
+
+
+def extract(url, binary, styles=False, runner=subprocess.run, timeout=RENDER_TIMEOUT_S):
+    """Render `url` once through Obscura: {"html": the rendered, annotated
+    HTML, "styles": the computed-style reading or None}, or None when the
+    render fails."""
+    js = EXTRACT_JS.replace("STYLES_JS", EVAL_JS.strip()).replace("STYLES ?", "true ?" if styles else "false ?")
+    cmd = [binary, "fetch", url, "--quiet", "--timeout", "30", "--eval", js]
+    try:
+        proc = runner(cmd, capture_output=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.decode("utf-8", "replace") if isinstance(proc.stdout, bytes) else (proc.stdout or "")
+    got = parse_eval(out)
+    return got if got and (got.get("html") or "").strip() else None
+
+
 def find_obscura(env=os.environ, which=shutil.which, exists=os.path.isfile):
     """The Obscura binary if installed: $OBSCURA_BIN (or $OBSCURA), then
     PATH, then the two places the kits install to. None means no browser.
