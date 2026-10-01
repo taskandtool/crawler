@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ttcrawl"
-version = "0.2.0"
-description = "Read a website into raw material an AI can work from: pages as markdown, an inventory, the header and footer as structure, media, structured data, linked documents, a WordPress export, and a launch check."
+version = "0.3.0"
+description = "Read a website into raw material an AI can work from: pages as markdown, an inventory, the header and footer as structure, pictures, structured data, linked documents, imported feeds, a launch check and an audit."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-dependencies = ["trafilatura>=1.8", "markitdown[pdf,docx,pptx,xlsx]>=0.1"]
+dependencies = ["markitdown[pdf,docx,pptx,xlsx]>=0.1"]
 
 [project.scripts]
 tt-crawl = "ttcrawl.cli:main"

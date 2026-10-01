@@ -8,4 +8,4 @@ tt-crawl survey https://competitor.com --external
 Into `raw/external/<host>/`. `tt-crawl add URL --out raw/external/<host>` for a page the survey left.
 
 ## Use
-Cite `raw/external/<host>/pages/...` in an analysis note whose title says whose it is. Their facts describe the world, never the owner.
+Their pages are what they say about themselves: cite `raw/external/<host>/pages/...` as theirs. Their facts describe the world, never the owner.

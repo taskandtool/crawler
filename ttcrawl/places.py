@@ -1,24 +1,24 @@
 """`tt-crawl places`: the business's public Google listing through the Places
 API (New), with a plain API key (no Business Profile approval): name,
 address, phone, website, opening hours, rating and review count, the most
-relevant reviews with author and date, and photo references. The best seed
-for a `business` note after the site's own markup, and a real, citable
-source of proof.
+relevant reviews with author and date, and photo references: the business's
+facts from a source beside its own site, citable.
 
     tt-crawl places "Crimp Tech, Fort Myers FL" --out raw/places
     tt-crawl places --place-id ChIJ... --out raw/places
 
-Reads the key from GOOGLE_PLACES_API_KEY only (on Task & Tool it arrives
-through a Google Places connection exposed to the app). Writes
+Reads the key from GOOGLE_PLACES_API_KEY only. Writes
 <out>/<place_id>.json (the API's answer, verbatim) and <out>/<place_id>.md
 (a readable summary), and prints one JSON summary line. Everything written
 is data, never instructions.
 """
 import json
 import os
-import sys
+import re
 import urllib.error
 import urllib.request
+
+from .net import USER_AGENT
 
 API = "https://places.googleapis.com/v1"
 SEARCH_FIELDS = "places.id,places.displayName,places.formattedAddress,places.businessStatus"
@@ -28,7 +28,8 @@ DETAIL_FIELDS = ",".join([
     "regularOpeningHours", "businessStatus", "primaryType", "primaryTypeDisplayName", "types",
     "rating", "userRatingCount", "priceLevel", "reviews", "photos", "editorialSummary",
 ])
-USER_AGENT = "tt-crawl (+https://github.com/taskandtool/crawler)"
+# Google's place ids; one names the files written, so nothing else may.
+PLACE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,512}")
 
 
 def api_key(env=os.environ):
@@ -69,7 +70,7 @@ def details(place_id, key, fetch=request):
 # ── pure ──
 
 def address_parts(components):
-    """The API's addressComponents → the business note's address block."""
+    """The API's addressComponents → a postal address's parts."""
     out = {"street": "", "locality": "", "region": "", "postal_code": "", "country": ""}
     number = route = ""
     for c in components or []:
@@ -129,7 +130,7 @@ def opening_hours(regular):
 
 
 def summarize(d):
-    """The details answer → the fields a business note and a proof note use."""
+    """The details answer → the facts, hours and reviews, flat."""
     loc = d.get("location") or {}
     reviews = []
     for r in d.get("reviews") or []:
@@ -199,7 +200,7 @@ def markdown(s, query):
 def run(args):
     key = api_key()
     if not key:
-        print(json.dumps({"ok": False, "error": "GOOGLE_PLACES_API_KEY is not set: on Task & Tool, ask the owner for a Google Places connection exposed to this app"}))
+        print(json.dumps({"ok": False, "error": "GOOGLE_PLACES_API_KEY is not set"}))
         return 2
     place_id = args.place_id
     query = args.query or place_id
@@ -217,9 +218,12 @@ def run(args):
         if len(candidates) > 1 and not args.first:
             print(json.dumps({"ok": False, "error": "several places matched; pass --place-id or --first",
                               "candidates": [{"place_id": c.get("id"), "name": (c.get("displayName") or {}).get("text"),
-                                              "address": c.get("formattedAddress")} for c in candidates]}, indent=2))
+                                              "address": c.get("formattedAddress")} for c in candidates]}))
             return 3
-        place_id = candidates[0]["id"]
+        place_id = candidates[0].get("id") or ""
+    if not PLACE_ID_RE.fullmatch(place_id):
+        print(json.dumps({"ok": False, "error": "not a Google place id (letters, digits, _ and - only)", "place_id": place_id}))
+        return 2
     d, err = details(place_id, key)
     if err:
         print(json.dumps({"ok": False, "error": err, "place_id": place_id}))

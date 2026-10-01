@@ -87,7 +87,6 @@ class PageParser(HTMLParser):
         self._loose = None         # [index, pieces] for a run of text outside any block
         self._skip_depth = 0       # inside script/style/svg/hidden: no block text
         self._link_marks = []      # (block index, piece count, href) per open <a>
-        self.videos = []           # video files the page plays (an mp4 first when a <video> offers several)
 
     # ── helpers ──
     def _classes(self, a):
@@ -315,11 +314,6 @@ class PageParser(HTMLParser):
             elif typ not in ("hidden", "submit", "button", "reset") or tag == "button":
                 self._current_form["fields"].append({"name": a.get("name") or "", "type": typ,
                                                      "required": "required" in a})
-        elif tag in ("video", "source") and (a.get("src") or a.get("data-src")) and \
-                (tag == "video" or any(t[0] == "video" for t in self.stack)):
-            src = self._abs(a.get("src") or a.get("data-src"))
-            if not src.startswith(("data:", "blob:")) and src not in self.videos:
-                self.videos.append(src)
         elif tag == "iframe" and (a.get("src") or a.get("data-src")):
             self.iframes.append(self._abs(a.get("src") or a.get("data-src")))
         elif tag == "script":
@@ -486,5 +480,4 @@ def parse_page(html, url):
         "body_word_count": sum(len(re.findall(r"\w+", t)) for t in p.body_text),
         "has_landmarks": bool(p.landmark_lines),
         "blocks": p.blocks_out(),
-        "videos": sorted(p.videos, key=lambda v: not re.search(r"\.mp4(\?|$)", v, re.I)),
     }

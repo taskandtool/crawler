@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ttcrawl import audit  # noqa: E402
+from ttcrawl import audit, net  # noqa: E402
 
 SITE = {
     "https://acme.test/": (200, """<html><head><title>Acme</title><meta name="description" content="Roofs."><link rel="canonical" href="https://acme.test/"></head>
@@ -25,6 +25,11 @@ SITE = {
 }
 
 
+def partners_or_public(url):
+    """The test partner's .test host stands in for a public one; anything else is judged for real."""
+    return url.startswith("https://partner.test/") or net.public_http_url(url)
+
+
 def fake_fetch(url, cap=0, timeout=0, method="GET"):
     key = audit.norm(url)
     if key == "https://acme.test/old-page":
@@ -44,7 +49,7 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(audit.norm("https://a.test/"), "https://a.test/")
 
     def test_audit_finds_the_planted_issues(self):
-        r = audit.audit("https://acme.test/", max_pages=20, fetch=fake_fetch)
+        r = audit.audit("https://acme.test/", max_pages=20, fetch=fake_fetch, public=partners_or_public)
         kinds = {(i["kind"], i["subject"]) for i in r["issues"]}
         self.assertIn(("broken page", "https://acme.test/gone"), kinds)
         self.assertIn(("broken internal link", "https://acme.test/img/missing.png"), kinds)
@@ -73,6 +78,26 @@ class AuditTests(unittest.TestCase):
         md = audit.markdown(clean)
         self.assertNotIn("## Issues", md)
         self.assertIn("No issues found", md)
+
+    def test_a_link_to_a_private_address_is_never_requested(self):
+        asked = []
+        page = ("<html><head><title>T</title></head><body><h1>T</h1><a href='http://169.254.169.254/latest/meta-data'>m</a>"
+                "<a href='http://10.0.0.5/admin'>a</a><a href='https://partner.test/ok'>p</a>"
+                "<a href='sms:+15550100'>t</a><a href='ftp://files.acme.test/x'>f</a></body></html>")
+
+        def fetch(url, cap=0, timeout=0, method="GET"):
+            asked.append(url)
+            body = page if audit.norm(url) == "https://acme.test/" else ""
+            return {"status": 200 if body or "partner" in url else 404, "final_url": url, "chain": [],
+                    "headers": {"content-type": "text/html"}, "body": body.encode()}
+
+        r = audit.audit("https://acme.test/", max_pages=5, fetch=fetch, public=partners_or_public)
+        self.assertFalse([u for u in asked if "169.254" in u or "10.0.0.5" in u])
+        self.assertEqual(sorted(r["external_skipped"]), ["http://10.0.0.5/admin", "http://169.254.169.254/latest/meta-data"])
+        self.assertIn("https://partner.test/ok", asked)
+        self.assertFalse([u for u in asked if u.startswith(("sms:", "ftp:"))])      # not http: nothing to request
+        self.assertFalse([u for u in r["external_skipped"] if not u.startswith("http")])
+        self.assertIn("Not requested", audit.markdown(r))
 
     def test_no_external_skips_partners(self):
         r = audit.audit("https://acme.test/", max_pages=20, fetch=fake_fetch, check_external=False)

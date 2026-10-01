@@ -1,7 +1,6 @@
 """Pure text helpers: slugs, dedupe, the repetition fallback for site
-furniture, markdown image handling, a plain html-to-text."""
+furniture, markdown image handling."""
 import hashlib
-import html as htmlmod
 import re
 import zlib
 from urllib.parse import urlsplit
@@ -96,16 +95,6 @@ class NearDuplicates:
 
 def norm_line(line):
     return re.sub(r"\s+", " ", line.strip()).lower()
-
-
-def html_to_text(html):
-    """A readable fallback when no extractor is available."""
-    html = re.sub(r"(?is)<(script|style|noscript|svg|template)[^>]*>.*?</\1>", " ", html)
-    html = re.sub(r"(?i)</(p|div|section|article|li|h[1-6]|br|tr|header|footer|nav)>", "\n", html)
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = htmlmod.unescape(text)
-    text = re.sub(r"[ \t]+", " ", text)
-    return re.sub(r"\n\s*\n+", "\n\n", text).strip() + "\n"
 
 
 def word_count(text):

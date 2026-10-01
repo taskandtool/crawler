@@ -11,12 +11,12 @@ import re
 HEADING_LEVEL = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
 
 
-def to_markdown(blocks, keep_chrome=False):
+def to_markdown(blocks):
     """Markdown from blocks (pure). The site's header, nav, footer and aside
-    blocks are left out unless `keep_chrome`."""
+    blocks are left out."""
     out, last = [], None
     for b in blocks:
-        if b.get("chrome") and not keep_chrome:
+        if b.get("chrome"):
             continue
         tag = b["tag"]
         if tag == "img":

@@ -1,4 +1,4 @@
-"""The header and footer as structure: the old site's information
+"""The header and footer as structure: the site's information
 architecture, read from the DOM landmarks rather than reconstructed from
 repeated text."""
 import re

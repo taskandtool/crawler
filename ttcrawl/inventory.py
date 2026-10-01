@@ -1,12 +1,7 @@
-"""The migration ledger: one record per discovered URL, and the same as a
+"""The inventory: one record per discovered URL, and the same as a
 table people can read."""
 import json
 import os
-
-FIELDS = ["url", "status", "final_url", "title", "meta_description", "h1", "h1_count", "canonical", "lang",
-          "word_count", "inbound_sitewide", "inbound_body", "outbound_internal", "in_sitemap", "lastmod",
-          "jsonld_types", "og_image", "noindex", "hreflang", "forms", "embeds", "tracking", "documents",
-          "template", "fingerprint", "file", "thin", "reason", "screenshot", "screenshot_error", "rendered", "traffic"]
 
 
 def new_record(url):
@@ -16,7 +11,7 @@ def new_record(url):
             "outbound_internal": [], "in_sitemap": False, "lastmod": None, "jsonld_types": [],
             "og_image": None, "noindex": False, "hreflang": [], "forms": [], "embeds": [], "tracking": {},
             "documents": [], "template": None, "fingerprint": None, "file": None, "thin": False, "reason": None, "screenshot": None,
-            "screenshot_error": None, "rendered": False, "traffic": None}
+            "screenshot_error": None, "rendered": False}
 
 
 def add_inbound(records, from_url, to_url, sitewide):

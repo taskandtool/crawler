@@ -1,7 +1,7 @@
 """Pictures, business facts, reviews, and the folder: identity across sizes,
 the largest fetched once, facts with their sources and never from a review,
-a crawl that resumes, a frozen folder, and moving an old folder into place.
-No network, no browser."""
+a crawl that resumes, and the registry beside the site folders. No network,
+no browser."""
 import json
 import os
 import struct
@@ -14,7 +14,7 @@ from io import StringIO
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ttcrawl import cli, dom, net, paths, site  # noqa: E402
+from ttcrawl import chrome, cli, dom, net, paths, site  # noqa: E402
 from ttcrawl.facts import Facts, action_score, jsonld_reviews, phones, reviews  # noqa: E402
 from ttcrawl.html import parse_page  # noqa: E402
 from ttcrawl.media import Media, dimensions, file_name, variant_of  # noqa: E402
@@ -75,7 +75,6 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(chosen[0]["key"], "a.com/logo.svg")
         self.assertEqual(len(chosen), 1 + 60)
         self.assertEqual(len(chosen[1]["pages"]), 3)                  # the photos more pages show come first
-        self.assertEqual(len(m.select("content", limit=5)), 5)
 
 
 class FactsTests(unittest.TestCase):
@@ -154,6 +153,8 @@ class CrawlFolderTests(unittest.TestCase):
 
     def setUp(self):
         self.saved = (net.fetch_once, net.fetch_bytes, net.is_public_host, site.time.sleep)
+        self.saved_driver = chrome.driver
+        chrome.driver = lambda choice, **kw: (None, "no browser in tests")
         net.is_public_host = lambda host: True
         site.time.sleep = lambda s: None
         self.fetched_pages, self.fetched_images = [], []
@@ -177,6 +178,7 @@ class CrawlFolderTests(unittest.TestCase):
 
     def tearDown(self):
         net.fetch_once, net.fetch_bytes, net.is_public_host, site.time.sleep = self.saved
+        chrome.driver = self.saved_driver
 
     def run_cli(self, *argv, expect=0):
         buf, err = StringIO(), StringIO()
@@ -187,7 +189,7 @@ class CrawlFolderTests(unittest.TestCase):
         return json.loads(buf.getvalue().strip().splitlines()[-1]) if code == 0 and buf.getvalue().strip() else err.getvalue()
 
     def crawl(self, out, *extra, expect=0):
-        return self.run_cli("site", "https://acme.com/", "--out", out, "--static", "--ignore-robots", "--no-sitemap",
+        return self.run_cli("site", "https://acme.com/", "--out", out, "--static",
                             "--delay", "0", *extra, expect=expect)
 
     def test_layout_pictures_and_facts(self):
@@ -250,8 +252,8 @@ class CrawlFolderTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as out:
                 net.fetch_once = dies_on_team
                 with self.assertRaises(KeyboardInterrupt), redirect_stderr(StringIO()), redirect_stdout(StringIO()):
-                    args = cli.build_parser().parse_args(["site", "https://acme.com/", "--out", out, "--static", "--ignore-robots",
-                                                          "--no-sitemap", "--delay", "0"])
+                    args = cli.build_parser().parse_args(["site", "https://acme.com/", "--out", out, "--static",
+                                                          "--delay", "0"])
                     args.func(args)
                 read_before = [u for u in self.fetched_pages]
                 net.fetch_once = real
@@ -263,68 +265,6 @@ class CrawlFolderTests(unittest.TestCase):
         finally:
             site.STATE_EVERY = saved_every
             net.fetch_once = real
-
-    def test_frozen_folder_refused(self):
-        with tempfile.TemporaryDirectory() as out:
-            self.crawl(out)
-            self.run_cli("freeze", out, "--reason", "the old site, at launch")
-            err = self.crawl(out, expect=2)
-            self.assertIn("frozen", err)
-            self.assertIn("the old site, at launch", err)
-
-    def test_an_old_folder_is_refused_then_relaid(self):
-        with tempfile.TemporaryDirectory() as root:
-            old = os.path.join(root, "raw", "web")
-            os.makedirs(os.path.join(old, "images"))
-            os.makedirs(os.path.join(old, "pages", "about"))
-            os.makedirs(os.path.join(root, "raw", "structured"))
-            with open(os.path.join(old, "_manifest.json"), "w") as f:
-                json.dump({"start": "https://www.acme.com/", "pages": [{"url": "https://www.acme.com/about", "file": "about.md"}]}, f)
-            with open(os.path.join(old, "_inventory.json"), "w") as f:
-                json.dump({"start": "https://www.acme.com/", "records": []}, f)
-            with open(os.path.join(old, "about.md"), "w") as f:
-                f.write("<!-- source: https://www.acme.com/about -->\n\n# About\n\n![Crew](images/abc.jpg)\n")
-            with open(os.path.join(old, "images", "abc.jpg"), "wb") as f:
-                f.write(b"x")
-            with open(os.path.join(old, "pages", "about", "01.png"), "wb") as f:
-                f.write(b"x")
-            with open(os.path.join(old, "_audit.md"), "w") as f:
-                f.write("audit")
-            with open(os.path.join(root, "raw", "structured", "about.json"), "w") as f:
-                f.write("{}")
-            self.assertIn("relayout", self.crawl(old, expect=2))
-            os.makedirs(os.path.join(root, "brain", "public"))
-            with open(os.path.join(root, "brain", "public", "about.md"), "w") as f:
-                f.write("---\nsources: [raw/web/about.md, raw/web/about.md.bak, raw/structured/about.json]\n---\n"
-                        "Family firm ([raw/web/about.md]). Photo: raw/web/images/abc.jpg. Crawl: raw/web/.\n")
-            cwd = os.getcwd()
-            os.chdir(root)
-            try:
-                out = self.run_cli("relayout", "raw/web", "--rewrite", "brain")
-            finally:
-                os.chdir(cwd)
-            self.assertEqual(out["rewritten"], ["brain/public/about.md"])
-            with open(os.path.join(root, "brain", "public", "about.md")) as f:
-                self.assertEqual(f.read(), "---\nsources: [raw/site/acme.com/pages/about.md, raw/site/acme.com/about.md.bak, "
-                                           "raw/site/acme.com/structured/about.json]\n---\nFamily firm "
-                                           "([raw/site/acme.com/pages/about.md]). Photo: raw/site/acme.com/images/abc.jpg. "
-                                           "Crawl: raw/site/acme.com/.\n")
-            new = os.path.join(root, "raw", "site", "acme.com")
-            self.assertEqual(out["to"], "raw/site/acme.com")
-            with open(os.path.join(new, "pages", "about.md")) as f:
-                text = f.read()
-            self.assertTrue(text.startswith('---\nurl: "https://www.acme.com/about"\n---\n'))
-            self.assertIn("](../images/abc.jpg)", text)
-            self.assertTrue(os.path.isfile(os.path.join(new, "images", "abc.jpg")))
-            self.assertTrue(os.path.isfile(os.path.join(new, "shots", "about", "01.png")))
-            self.assertTrue(os.path.isfile(os.path.join(new, "structured", "about.json")))
-            self.assertTrue(os.path.isfile(os.path.join(root, "raw", "audit", "acme.com", "audit.md")))
-            with open(os.path.join(new, "_index", "manifest.json")) as f:
-                self.assertEqual(json.load(f)["pages"][0]["file"], "pages/about.md")
-            with open(os.path.join(new, "_index", "moved.json")) as f:
-                moved = json.load(f)
-            self.assertEqual(moved["raw/web/about.md"], "raw/site/acme.com/pages/about.md")
-            self.assertFalse(os.path.exists(os.path.join(root, "raw", "web")))
 
     def test_the_sites_registry_at_a_fixed_path(self):
         with tempfile.TemporaryDirectory() as root:

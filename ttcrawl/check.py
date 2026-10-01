@@ -56,16 +56,16 @@ def jsonld_types_of(parsed):
 
 def run(args):
     site = paths.the_site()
-    args.inventory = args.inventory or (paths.ledger(site, "inventory.json") if site else None)
+    args.inventory = args.inventory or (paths.index(site, "inventory.json") if site else None)
     if not args.inventory or not os.path.isfile(args.inventory):
         sys.stderr.write("check needs --inventory: the old site's raw/site/<host>/_index/inventory.json\n")
         return 2
     with open(args.inventory) as f:
         inv = json.load(f)
-    args.out = args.out or os.path.join(paths.audit_dir(inv.get("start") or args.new_base_url), "launch-%s.md" % paths.today())
+    out = os.path.join(paths.audit_dir(inv.get("start") or args.new_base_url), "launch-%s.md" % paths.today())
     new_base = args.new_base_url.rstrip("/")
-    if not net.public_http_url(new_base):
-        sys.stderr.write("refusing: the new base is not a public http url\n")
+    if not net.local_or_public_http_url(new_base):
+        sys.stderr.write("refusing: the new base is neither a public http(s) url nor http://localhost\n")
         return 2
     rows = []
     for rec in inv.get("records", []):
@@ -104,16 +104,16 @@ def run(args):
               "sitemap": {"fetched": bool(sitemap_urls), "entries": len(sitemap_urls), "missing_from_sitemap": missing_from_sitemap,
                           "new_in_sitemap": new_in_sitemap},
               "home": {"status": home["status"], "jsonld_types": home.get("jsonld_types", []), "title": home.get("title", "")}}
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    with open(args.out, "w") as f:
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "w") as f:
         f.write(markdown(report))
-    with open(os.path.splitext(args.out)[0] + ".json", "w") as f:
+    with open(os.path.splitext(out)[0] + ".json", "w") as f:
         json.dump(report, f, indent=2)
-    paths.register_report(args.out, "_launch.json", {"host": paths.host_of(inv.get("start") or new_base), "new_base": new_base,
+    paths.register_report(out, "_launch.json", {"host": paths.host_of(inv.get("start") or new_base), "new_base": new_base,
                                                      "updated": paths.today(), "ok": not (counts[MISSING] or counts[ERROR]),
                                                      "missing": counts[MISSING], "errors": counts[ERROR]})
     print(json.dumps({"checked": len(rows), **counts, "sitemap_entries": len(sitemap_urls),
-                      "missing_from_sitemap": len(missing_from_sitemap), "home_jsonld": home.get("jsonld_types", []), "out": args.out}))
+                      "missing_from_sitemap": len(missing_from_sitemap), "home_jsonld": home.get("jsonld_types", []), "out": out}))
     return 1 if counts[MISSING] or counts[ERROR] else 0
 
 
@@ -143,7 +143,6 @@ def markdown(report):
 
 def add_parser(sub):
     p = sub.add_parser("check", help="the launch check: every inventory URL on the new host, the sitemap, the home page's JSON-LD")
-    p.add_argument("new_base_url")
+    p.add_argument("new_base_url", help="the new site: http://localhost:PORT before publishing, its public URL after")
     p.add_argument("--inventory", default=None, help="the old site's inventory (default: the one raw/site/<host>)")
-    p.add_argument("--out", default=None, help="default raw/audit/<old host>/launch-<date>.md")
     p.set_defaults(func=run)

@@ -1,9 +1,14 @@
+import json
 import os
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ttcrawl import places  # noqa: E402
+from ttcrawl import cli, places  # noqa: E402
 
 DETAILS = {
     "id": "ChIJx", "displayName": {"text": "Crimp Tech"},
@@ -85,6 +90,30 @@ class PlacesTests(unittest.TestCase):
 
     def test_no_key_is_a_clear_refusal(self):
         self.assertEqual(places.api_key({}), "")
+
+    def run_cli(self, *argv):
+        out = StringIO()
+        with redirect_stdout(out), mock.patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "k"}):
+            args = cli.build_parser().parse_args(["places", *argv])
+            code = args.func(args)
+        return code, out.getvalue()
+
+    def test_a_place_id_never_names_a_file_it_is_not(self):
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(places, "details") as details:
+            code, printed = self.run_cli("--place-id", "../../evil", "--out", out)
+            self.assertEqual(code, 2)
+            self.assertEqual(self.run_cli("--place-id", "ChIJx\n", "--out", out)[0], 2)   # not even a trailing newline
+            self.assertFalse(json.loads(printed)["ok"])
+            details.assert_not_called()
+            self.assertEqual(os.listdir(out), [])
+
+    def test_several_matches_are_one_summary_line(self):
+        two = [{"id": "ChIJa", "displayName": {"text": "A"}}, {"id": "ChIJb", "displayName": {"text": "B"}}]
+        with mock.patch.object(places, "search", return_value=(two, None)):
+            code, printed = self.run_cli("Crimp Tech, Fort Myers")
+        self.assertEqual(code, 3)
+        self.assertEqual(len(printed.strip().splitlines()), 1)
+        self.assertEqual([c["place_id"] for c in json.loads(printed)["candidates"]], ["ChIJa", "ChIJb"])
 
 
 if __name__ == "__main__":

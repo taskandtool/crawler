@@ -200,7 +200,7 @@ class Media:
                 kind = "mark"
             it["kind"] = kind
 
-    def select(self, mode, limit=0):
+    def select(self, mode):
         """The pictures to fetch, best first. none: nothing; brand: the logo
         candidates, the og:image, and the photographs the most pages show,
         largest first, up to BRAND_PHOTOS; content: the logo and every
@@ -217,8 +217,7 @@ class Media:
             chosen = logos + [i for i in items if i["og"]] + photos[:BRAND_PHOTOS]
         else:
             chosen = logos + [i for i in items if not i["chrome"]]
-        out = list({i["key"]: i for i in chosen}.values())
-        return out[:limit] if limit else out
+        return list({i["key"]: i for i in chosen}.values())
 
     @staticmethod
     def candidates(it):

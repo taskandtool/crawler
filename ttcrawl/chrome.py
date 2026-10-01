@@ -1,11 +1,11 @@
-"""The browsers tt-crawl drives, and installing them.
+"""The browsers tt-crawl drives, choosing one, and installing them.
 
-Two engines, for two jobs. Obscura reads pages: it is small, fast, renders
-JavaScript, and refuses private addresses itself. Chrome takes the pictures a
-person judges by eye: Obscura paints some things differently from every
-browser people use (a circle's curve, a box sized only by its aspect ratio),
-so a screenshot for a design review comes from Chrome when it is on the
-machine, and from Obscura otherwise.
+One browser reads a crawl's pages and takes its screenshots (`--browser`).
+Chrome, the default, renders and paints as the browsers people use do; it
+is the heavier of the two and loads anything, so every request it makes goes
+through cdp.RequestGuard. Obscura is small and fast and refuses private
+addresses itself, but paints some things differently (a circle's curve, a
+box sized only by its aspect ratio).
 
 `tt-crawl install-browser chrome` fetches Google's chrome-headless-shell from
 the Chrome for Testing channel into the user's own folders, adds the system
@@ -23,11 +23,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import urllib.request
 import zipfile
 
-from . import cdp, net
+from . import browser, cdp, net
 
 CFT_JSON = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
 OBSCURA_REPO = "https://github.com/h4ckf0r0day/obscura"
@@ -60,7 +59,7 @@ FONT_PACKAGES = ["fontconfig", "fonts-liberation", "fonts-dejavu-core", "fonts-n
 
 
 def find_chrome(env=os.environ, exists=os.path.isfile, which=shutil.which):
-    """A Chrome to take screenshots with, or None: $CHROME_BIN, then
+    """A Chrome to drive, or None: $CHROME_BIN, then
     chrome-headless-shell on the PATH, then the usual places."""
     explicit = env.get("CHROME_BIN")
     if explicit:
@@ -143,11 +142,6 @@ def install_chrome(log=print):
         for dirpath, _, files in os.walk(home):          # zip loses the executable bits
             for f in files:
                 os.chmod(os.path.join(dirpath, f), 0o755)
-    os.makedirs(LOCAL_BIN, exist_ok=True)
-    link = os.path.join(LOCAL_BIN, "chrome-headless-shell")
-    if os.path.lexists(link):
-        os.remove(link)
-    os.symlink(binary, link)
     choices, unknown = packages_for(missing_libraries(binary))
     if unknown:
         log("  libraries with no known package: %s" % ", ".join(unknown))
@@ -159,13 +153,19 @@ def install_chrome(log=print):
     still = missing_libraries(binary)
     if still:
         raise RuntimeError("chrome-headless-shell still lacks %s" % ", ".join(still))
+    # linked onto the PATH only once it can run, so find_chrome never finds a half install
+    os.makedirs(LOCAL_BIN, exist_ok=True)
+    link = os.path.join(LOCAL_BIN, "chrome-headless-shell")
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(binary, link)
     return link
 
 
 def _bin_dir():
     """Where a browser binary goes: /usr/local/bin when this user can write
-    there (directly or with sudo), else ~/.local/bin; the order the Starter
-    Apps' setup always used, so an upgrade replaces the copy on the PATH."""
+    there (directly or with sudo), else ~/.local/bin, the order find_obscura
+    looks in, so an upgrade replaces the copy on the PATH."""
     if os.access("/usr/local/bin", os.W_OK):
         return "/usr/local/bin", []
     if shutil.which("sudo") and subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0:
@@ -221,14 +221,11 @@ class Chrome:
                            "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=%d" % self.port,
                            "--user-data-dir=%s" % self.profile, "about:blank"],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.ws_url = None
-        for _ in range(80):
-            try:
-                with urllib.request.urlopen("http://127.0.0.1:%d/json/version" % self.port, timeout=2) as r:
-                    self.ws_url = json.load(r)["webSocketDebuggerUrl"]
-                    break
-            except Exception:
-                time.sleep(0.25)
+        try:
+            self.ws_url = cdp.wait_for_endpoint(self.port, tries=80)
+        except BaseException:          # interrupted while waiting: leave no Chrome behind
+            self.stop()
+            raise
         if not self.ws_url:
             self.stop()
             raise cdp.CDPError("chrome never opened its debugging port")
@@ -243,23 +240,29 @@ class Chrome:
         shutil.rmtree(self.profile, ignore_errors=True)
 
 
-def shooter(engine, obscura, install=True, log=None):
-    """The Shooter a crawl's --screenshots uses. auto: Chrome when it is on
-    the machine or can be installed, Obscura otherwise; chrome or obscura:
-    that one (None when it is not there)."""
+def driver(choice, install=True, log=None):
+    """The browser a crawl reads pages and takes screenshots with, as
+    (cdp.Driver or None, a note or None). chrome: Chrome when it is on the
+    machine or can be installed, else Obscura, with a note saying so; a
+    Chrome that will not start hands over to Obscura too (Driver.note).
+    obscura: Obscura. None when neither is there."""
     log = log or (lambda m: sys.stderr.write(m + "\n"))
-    if engine in ("auto", "chrome"):
+    note = None
+    if choice == "chrome":
         binary = find_chrome()
         if not binary and install and can_install_chrome():
             try:
                 binary = install_chrome(log=log)
-            except Exception as e:          # an install that fails costs the pictures' fidelity, never the crawl
-                log("chrome could not be installed (%s); screenshots from Obscura" % str(e).split("\n")[0])
+            except Exception as e:          # an install that fails costs fidelity, never the crawl
+                note = "chrome could not be installed (%s)" % str(e).split("\n")[0][:160]
+        obscura = browser.find_obscura()
         if binary:
-            return cdp.Shooter(binary, browser=Chrome)
-        if engine == "chrome":
-            return None
-    return cdp.Shooter(obscura) if obscura else None
+            return cdp.Driver(binary, browser=Chrome, fallback=(obscura, cdp.Obscura) if obscura else None), None
+        note = note or "chrome is not on this machine and cannot be installed here"
+    obscura = browser.find_obscura()
+    if obscura:
+        return cdp.Driver(obscura, browser=cdp.Obscura), note and note + "; obscura used instead"
+    return None, (note + "; " if note else "") + "obscura is not installed: no browser"
 
 
 def run_install(args):
@@ -274,7 +277,7 @@ def run_install(args):
 
 
 def add_parser(sub):
-    p = sub.add_parser("install-browser", help="install Chrome (for screenshots) or Obscura (for reading pages) for this user")
+    p = sub.add_parser("install-browser", help="install Chrome or Obscura (the browsers --browser chooses) for this user")
     p.add_argument("engine", choices=("chrome", "obscura"))
     p.add_argument("--version", default=None, help="Obscura's release tag (default %s)" % OBSCURA_DEFAULT)
     p.set_defaults(func=run_install)

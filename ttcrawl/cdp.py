@@ -1,11 +1,11 @@
 """A small Chrome DevTools Protocol client over a standard-library WebSocket,
-enough to drive `obscura serve` for full-page screenshots.
+enough to drive Chrome or `obscura serve`: read a page as the browser built
+it, and take it whole as screenshots.
 
-`obscura fetch --screenshot` captures only the first screen, and one CDP
-capture is refused past 33,554,432 pixels (about 23,300px tall at 1440 wide),
-so a page is captured as strips of a fixed height instead: every strip is
-under the limit whatever the page's length, and a strip is also the size a
-model reads well.
+One CDP capture is refused past 33,554,432 pixels (about 23,300px tall at
+1440 wide), so a page is captured as strips of a fixed height instead: every
+strip is under the limit whatever the page's length, and a strip is also the
+size a model reads well.
 """
 import base64
 import json
@@ -22,7 +22,12 @@ VIEWPORT = (1440, 1000)
 
 
 class CDPError(Exception):
-    pass
+    """The browser or its connection failed: a fresh browser may do better."""
+
+
+class PageError(CDPError):
+    """This page failed in a working browser (refused, empty, too slow): a
+    fresh browser would fail it the same way."""
 
 
 class WebSocket:
@@ -129,9 +134,13 @@ class Session:
         self.next_id = 0
         self.events = []
         self.on_event = on_event
-        target = self.call("Target.createTarget", {"url": "about:blank"})["targetId"]
-        self.session = self.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
-        self.target = target
+        self.target = None
+        try:
+            self.target = self.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+            self.session = self.call("Target.attachToTarget", {"targetId": self.target, "flatten": True})["sessionId"]
+        except BaseException:
+            self.close()
+            raise
 
     def send(self, method, params=None, session=True):
         """A command whose answer nobody waits for; returns its id."""
@@ -153,13 +162,16 @@ class Session:
         self.ws.sock.settimeout(timeout)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            reply = json.loads(self.ws.recv())
+            try:
+                reply = json.loads(self.ws.recv())
+            except socket.timeout:
+                break
             if reply.get("id") == want:
                 if "error" in reply:
-                    raise CDPError("%s: %s" % (method, reply["error"].get("message")))
+                    raise PageError("%s: %s" % (method, reply["error"].get("message")))
                 return reply.get("result", {})
             self._incoming(reply)
-        raise CDPError("%s timed out" % method)
+        raise PageError("%s timed out" % method)
 
     def wait_event(self, name, timeout=30):
         deadline = time.monotonic() + timeout
@@ -180,10 +192,11 @@ class Session:
         return (r.get("result") or {}).get("value")
 
     def close(self):
-        try:
-            self.call("Target.closeTarget", {"targetId": self.target}, session=False, timeout=10)
-        except Exception:
-            pass
+        if self.target:
+            try:
+                self.call("Target.closeTarget", {"targetId": self.target}, session=False, timeout=10)
+            except Exception:
+                pass
         self.ws.close()
 
 
@@ -233,6 +246,17 @@ def free_port():
     return port
 
 
+def wait_for_endpoint(port, tries):
+    """The browser's websocket URL once its debugging port answers, or None."""
+    for _ in range(tries):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2) as r:
+                return json.load(r)["webSocketDebuggerUrl"]
+        except Exception:
+            time.sleep(0.25)
+    return None
+
+
 class Obscura:
     """`obscura serve` on a loopback port for the life of a crawl. Private
     networks stay blocked (Obscura's own default), so the SSRF rail holds for
@@ -243,14 +267,11 @@ class Obscura:
         self.port = free_port()
         self.proc = popen([binary, "serve", "--port", str(self.port)],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.ws_url = None
-        for _ in range(60):
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/version", timeout=2) as r:
-                    self.ws_url = json.load(r)["webSocketDebuggerUrl"]
-                    break
-            except Exception:
-                time.sleep(0.25)
+        try:
+            self.ws_url = wait_for_endpoint(self.port, tries=60)
+        except BaseException:
+            self.stop()
+            raise
         if not self.ws_url:
             self.stop()
             raise CDPError("obscura serve never came up")
@@ -264,32 +285,69 @@ class Obscura:
                 self.proc.kill()
 
 
-class Shooter:
-    """Full-page screenshots across a crawl: one `obscura serve`, started on
-    the first shot, replaced every `PAGES_PER_BROWSER` pages (it degrades on a
-    long run) and once more when a page kills it. A shot never costs the page:
-    `shoot` returns the meta, or {"error": ...}."""
-    PAGES_PER_BROWSER = 15
+class Driver:
+    """One browser across a crawl, for reading pages and for screenshots:
+    started on first use, replaced every USES_PER_BROWSER uses (a long run
+    wears it down) and once more when it dies under a page. A browser that
+    will not start hands over to `fallback` ((binary, browser class)), else
+    the driver is broken and every page is read without it; `note` says
+    which. Neither `render` nor `shoot` ever raises."""
+    USES_PER_BROWSER = 30
 
-    def __init__(self, binary, browser=Obscura, capture=None):
-        self.binary, self.browser_cls = binary, browser
+    def __init__(self, binary, browser=Obscura, capture=None, renderer=None, fallback=None):
+        self.binary, self.browser_cls, self.fallback = binary, browser, fallback
         self.capture = capture or screenshot_strips
-        self.browser, self.shots = None, 0
+        self.renderer = renderer or render
+        self.browser, self.uses, self.broken, self.note = None, 0, None, None
+
+    @property
+    def engine(self):
+        return None if self.broken else self.browser_cls.engine
 
     def _fresh(self):
         self.stop()
-        self.browser, self.shots = self.browser_cls(self.binary), 0
-
-    def shoot(self, url, out_dir):
-        for attempt in (1, 2):
+        while True:
             try:
-                if self.browser is None or self.shots >= self.PAGES_PER_BROWSER or attempt == 2:
+                self.browser, self.uses = self.browser_cls(self.binary), 0
+                return
+            except (CDPError, OSError) as e:
+                why = "%s would not start (%s)" % (self.browser_cls.engine, str(e).split("\n")[0][:160])
+                if not self.fallback:
+                    self.broken = why
+                    self.note = why + "; pages read without a browser"
+                    raise CDPError(why)
+                (self.binary, self.browser_cls), self.fallback = self.fallback, None
+                self.note = why + "; %s used instead" % self.browser_cls.engine
+
+    def _use(self, fn, *args):
+        err = self.broken
+        for attempt in (1, 2):
+            if self.broken:
+                break
+            try:
+                if self.browser is None or self.uses >= self.USES_PER_BROWSER or attempt == 2:
                     self._fresh()
-                self.shots += 1
-                return self.capture(self.browser, url, out_dir)
+                self.uses += 1
+                return fn(self.browser, *args)
+            except PageError:
+                raise
             except (CDPError, OSError, ValueError, KeyError) as e:
                 err = str(e).split("\n")[0][:200]
-        return {"error": err}
+        raise CDPError(err or "the browser failed")
+
+    def render(self, url, styles=False):
+        """{"html": ..., "styles": ...} as the browser built the page, or None."""
+        try:
+            return self._use(self.renderer, url, styles)
+        except CDPError:
+            return None
+
+    def shoot(self, url, out_dir):
+        """The screenshot meta, or {"error": ...}."""
+        try:
+            return self._use(self.capture, url, out_dir)
+        except CDPError as e:
+            return {"error": str(e)}
 
     def stop(self):
         if self.browser:
@@ -311,11 +369,10 @@ SETTLE_JS = "document.body ? document.body.innerText.length : 0"
 HEIGHT_JS = "Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)"
 
 
-def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIGHT,
-                      max_strips=MAX_STRIPS, timeout=45):
-    """The whole page as PNG strips `01.png`, `02.png`… under `out_dir`, plus
-    `meta.json`. Returns the meta dict, or raises CDPError."""
-    guard = RequestGuard() if getattr(browser, "needs_guard", False) else None
+def open_page(browser, url, width=VIEWPORT[0], timeout=45):
+    """A session on `url`, loaded at desktop width; Chrome's requests go
+    through a RequestGuard. Raises CDPError when the page does not load."""
+    guard = RequestGuard() if browser.needs_guard else None
     s = Session(browser.ws_url, timeout=timeout, on_event=guard)
     try:
         if guard:
@@ -323,20 +380,54 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIG
         s.call("Page.enable")
         s.call("Emulation.setDeviceMetricsOverride",
                {"width": width, "height": VIEWPORT[1], "deviceScaleFactor": 1, "mobile": False})
-        s.call("Page.navigate", {"url": url}, timeout=timeout)
+        nav = s.call("Page.navigate", {"url": url}, timeout=timeout)
+        if nav.get("errorText"):
+            raise PageError("%s: %s" % (url, nav["errorText"]))
         s.wait_event("Page.loadEventFired", timeout=timeout)
+    except BaseException:
+        s.close()
+        raise
+    return s
+
+
+def settle(s, rounds=10, pause=0.5):
+    """Wait until the page's text stops growing (a script still filling it in)."""
+    last = -1
+    for _ in range(rounds):
+        n = s.evaluate(SETTLE_JS) or 0
+        if n and n == last:
+            break
+        last = n
+        time.sleep(pause)
+
+
+def render(browser, url, styles=False, timeout=45):
+    """The page as the browser built it: {"html": ..., "styles": ...} from
+    browser.EXTRACT_JS. Raises CDPError when it does not render."""
+    from .browser import extract_js, parse_eval
+    s = open_page(browser, url, timeout=timeout)
+    try:
+        settle(s)
+        got = parse_eval(s.evaluate(extract_js(styles), timeout=timeout))
+    finally:
+        s.close()
+    if not got or not (got.get("html") or "").strip():
+        raise PageError("%s rendered empty" % url)
+    return got
+
+
+def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIGHT,
+                      max_strips=MAX_STRIPS, timeout=45):
+    """The whole page as PNG strips `01.png`, `02.png`… under `out_dir`, plus
+    `meta.json`. Returns the meta dict, or raises CDPError."""
+    s = open_page(browser, url, width=width, timeout=timeout)
+    try:
         # Lazy images decode as they come into view: walk down the page once,
         # then wait until the text stops growing.
         s.evaluate("(async () => { for (let y = 0; y < %s; y += 800) { scrollTo(0, y); "
                    "await new Promise(r => setTimeout(r, 60)); } scrollTo(0, 0); })()" % HEIGHT_JS,
                    await_promise=True, timeout=timeout)
-        last = -1
-        for _ in range(10):
-            n = s.evaluate(SETTLE_JS) or 0
-            if n and n == last:
-                break
-            last = n
-            time.sleep(0.5)
+        settle(s)
         height = s.evaluate(HEIGHT_JS) or VIEWPORT[1]
         plan, truncated = strip_plan(height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
@@ -353,7 +444,7 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIG
                 f.write(base64.b64decode(shot["data"]))
             files.append(name)
         meta = {"url": url, "width": width, "height": int(height), "strip_height": strip,
-                "strips": files, "truncated": truncated, "engine": getattr(browser, "engine", "obscura")}
+                "strips": files, "truncated": truncated, "engine": browser.engine}
         with open(os.path.join(out_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
         return meta

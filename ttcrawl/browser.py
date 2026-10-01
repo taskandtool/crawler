@@ -1,14 +1,11 @@
-"""The Obscura headless browser, as this tool uses it: render a page's DOM
-and read computed styles. Full-page screenshots go through its CDP server
-(cdp.py). Installing Obscura is the kits' setup job; this only finds and
-runs it."""
+"""What a page is asked once a browser has built it (the HTML as rendered,
+annotated, and the computed styles), and finding Obscura. cdp.py drives
+the browser; `tt-crawl install-browser` installs one."""
 import json
 import os
 import shutil
-import subprocess
 
 OBSCURA_CANDIDATES = ("/usr/local/bin/obscura", os.path.expanduser("~/.local/bin/obscura"))
-RENDER_TIMEOUT_S = 60
 
 # What the browser is asked to read off a rendered page for the brand: the
 # fonts and colours by role, the buttons, the logo candidates. One JSON string.
@@ -70,26 +67,15 @@ EXTRACT_JS = r"""
 """
 
 
-def extract(url, binary, styles=False, runner=subprocess.run, timeout=RENDER_TIMEOUT_S):
-    """Render `url` once through Obscura: {"html": the rendered, annotated
-    HTML, "styles": the computed-style reading or None}, or None when the
-    render fails."""
-    js = EXTRACT_JS.replace("STYLES_JS", EVAL_JS.strip()).replace("STYLES ?", "true ?" if styles else "false ?")
-    cmd = [binary, "fetch", url, "--quiet", "--timeout", "30", "--eval", js]
-    try:
-        proc = runner(cmd, capture_output=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if proc.returncode != 0:
-        return None
-    out = proc.stdout.decode("utf-8", "replace") if isinstance(proc.stdout, bytes) else (proc.stdout or "")
-    got = parse_eval(out)
-    return got if got and (got.get("html") or "").strip() else None
+def extract_js(styles=False):
+    """EXTRACT_JS, asking for the computed styles or not."""
+    return EXTRACT_JS.replace("STYLES_JS", EVAL_JS.strip()).replace("STYLES ?", "true ?" if styles else "false ?")
 
 
 def find_obscura(env=os.environ, which=shutil.which, exists=os.path.isfile):
     """The Obscura binary if installed: $OBSCURA_BIN (or $OBSCURA), then
-    PATH, then the two places the kits install to. None means no browser.
+    PATH, then the two places `tt-crawl install-browser obscura` puts it.
+    None means it is not installed.
     An explicit path that does not exist is a misconfiguration, not a
     reason to pick another binary."""
     explicit = env.get("OBSCURA_BIN") or env.get("OBSCURA")
@@ -102,34 +88,6 @@ def find_obscura(env=os.environ, which=shutil.which, exists=os.path.isfile):
         if exists(cand):
             return cand
     return None
-
-
-def render_html(url, binary, runner=subprocess.run, timeout=RENDER_TIMEOUT_S):
-    """Fetch `url` through Obscura and return the rendered HTML, or None when
-    the render fails, times out, or comes back empty. Obscura refuses private
-    and internal addresses itself, so the SSRF rail holds on this path too."""
-    cmd = [binary, "fetch", url, "--dump", "html", "--quiet", "--timeout", "30"]
-    try:
-        proc = runner(cmd, capture_output=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if proc.returncode != 0:
-        return None
-    out = proc.stdout.decode("utf-8", "replace") if isinstance(proc.stdout, bytes) else (proc.stdout or "")
-    return out if out.strip() else None
-
-
-def read_styles(url, binary, runner=subprocess.run, timeout=RENDER_TIMEOUT_S):
-    """Evaluate EVAL_JS on the rendered page and return its dict, or None."""
-    cmd = [binary, "fetch", url, "--quiet", "--timeout", "30", "--eval", EVAL_JS]
-    try:
-        proc = runner(cmd, capture_output=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if proc.returncode != 0:
-        return None
-    out = proc.stdout.decode("utf-8", "replace") if isinstance(proc.stdout, bytes) else (proc.stdout or "")
-    return parse_eval(out)
 
 
 def parse_eval(out):

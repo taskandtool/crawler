@@ -1,13 +1,13 @@
 # brand: learn a business from its own website
-Facts, voice and look, for a brain or a website without one: every page the site's own nav names, a sample of each collection, the brand's pictures, the styles and screenshots.
+Facts, voice and look: every page the site's own nav names, a sample of each collection, the brand's pictures, the styles and screenshots.
 
 ## Run
 ```
 tt-crawl brand https://theirsite.com
 tt-crawl docs                                  # price lists, brochures, menus the pages link to
-tt-crawl places "Business name, City" --out raw/places   # when a Google Places connection is granted
+tt-crawl places "Business name, City" --out raw/places   # when GOOGLE_PLACES_API_KEY is set
 ```
-`brand` is `site` with `--images brand --styles --screenshots --per-template 2 --per-section 6`: every page the header links to is read; a blog or a shop is sampled, two of each kind.
+`brand` is `site` with the brand's pictures (`--images brand`), `--styles` and `--screenshots`, and each collection sampled: every page the header links to is read; a blog or a shop gives two of each kind, six per section. Run the same command again later to refresh: pages are rewritten in place, and `_index/manifest.json` marks each one new, changed or the same.
 
 ## Read, in this order
 1. `raw/site/<host>/_index/facts.json`: phones, emails, addresses, hours, social, the book and quote links, each with where it was found. Two values for one fact are both kept: ask the owner which is right.

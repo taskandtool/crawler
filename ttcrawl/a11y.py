@@ -4,7 +4,6 @@ title and description hygiene search engines care about. Rendered checks
 (focus visibility, tap targets, colour used alone) belong to a person
 looking at the page.
 """
-import re
 from collections import Counter
 from html.parser import HTMLParser
 

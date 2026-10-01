@@ -1,18 +1,16 @@
-"""Chrome's request guard and the choice of screenshot engine, the playbooks
-and profiles, importing a collection from a feed, and Firecrawl as a fetcher
-(against a stand-in server speaking its API). No network, no browser."""
-import http.server
+"""Chrome's request guard and the choice of browser, the playbooks and
+profiles, and importing a collection from a feed or a WordPress site. No
+network, no browser."""
 import json
 import os
 import sys
 import tempfile
-import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ttcrawl import cdp, chrome, cli, firecrawl, importer, net, playbooks, site  # noqa: E402
+from ttcrawl import browser, cdp, chrome, cli, importer, net, playbooks, site  # noqa: E402
 
 LONG = " ".join(["Our roofers replace slate and tile roofs across the county, with a ten year guarantee."] * 6)
 SITE = {
@@ -52,26 +50,33 @@ class GuardTests(unittest.TestCase):
         self.assertTrue(chrome.Chrome.needs_guard)
         self.assertFalse(cdp.Obscura.needs_guard)
 
-    def test_the_engine_choice(self):
-        saved = (chrome.find_chrome, chrome.can_install_chrome, chrome.install_chrome)
+    def test_the_browser_choice(self):
+        saved = (chrome.find_chrome, chrome.can_install_chrome, chrome.install_chrome, browser.find_obscura)
         try:
             chrome.find_chrome = lambda **kw: "/bin/chrome"
-            s = chrome.shooter("auto", "/bin/obscura")
-            self.assertIs(s.browser_cls, chrome.Chrome)
+            browser.find_obscura = lambda **kw: "/bin/obscura"
+            d, note = chrome.driver("chrome")
+            self.assertEqual((d.browser_cls, d.engine, note), (chrome.Chrome, "chrome", None))
+            self.assertEqual(chrome.driver("obscura")[0].browser_cls, cdp.Obscura)
             chrome.find_chrome = lambda **kw: None
             chrome.can_install_chrome = lambda: False
-            self.assertIs(chrome.shooter("auto", "/bin/obscura").browser_cls, cdp.Obscura)   # the fallback
-            self.assertIsNone(chrome.shooter("chrome", "/bin/obscura"))
-            self.assertIsNone(chrome.shooter("auto", None))
+            d, note = chrome.driver("chrome")
+            self.assertIs(d.browser_cls, cdp.Obscura)                                   # the fallback, said
+            self.assertIn("obscura used instead", note)
             chrome.can_install_chrome = lambda: True
 
             def fails(log):
                 raise RuntimeError("no network")
             chrome.install_chrome = fails
-            with redirect_stderr(StringIO()):
-                self.assertIs(chrome.shooter("auto", "/bin/obscura").browser_cls, cdp.Obscura)  # an install failure costs fidelity, not the crawl
+            d, note = chrome.driver("chrome")
+            self.assertIs(d.browser_cls, cdp.Obscura)              # an install failure costs fidelity, not the crawl
+            self.assertIn("no network", note)
+            browser.find_obscura = lambda **kw: None
+            d, note = chrome.driver("obscura")
+            self.assertIsNone(d)
+            self.assertIn("obscura is not installed", note)
         finally:
-            chrome.find_chrome, chrome.can_install_chrome, chrome.install_chrome = saved
+            chrome.find_chrome, chrome.can_install_chrome, chrome.install_chrome, browser.find_obscura = saved
 
     def test_missing_libraries_become_packages(self):
         class Proc:
@@ -85,8 +90,7 @@ class GuardTests(unittest.TestCase):
 
 class PlaybookTests(unittest.TestCase):
     def test_list_and_print(self):
-        self.assertEqual(playbooks.names(), sorted(["audit", "brand", "competitor", "import", "launch", "rebuild",
-                                                    "reference", "survey"]))
+        self.assertEqual(playbooks.names(), ["brand", "competitor", "import", "launch", "rebuild", "survey"])
         for n in playbooks.names():
             text = playbooks.read(n)
             self.assertTrue(text.startswith("# %s:" % n), n)
@@ -105,8 +109,7 @@ class PlaybookTests(unittest.TestCase):
         self.assertEqual((brand.images, brand.styles, brand.screenshots, brand.per_template, brand.profile), ("brand", True, True, 2, "brand"))
         pages = p.parse_args(["pages", "https://a.com/"])
         self.assertEqual((pages.images, pages.max_pages, pages.per_template), ("content", 1000, None))
-        ref = p.parse_args(["reference", "https://a.com/"])
-        self.assertEqual((ref.external, ref.images, ref.max_pages), (True, "none", 8))
+        self.assertEqual((pages.browser, pages.static), ("chrome", False))       # chrome reads pages by default
 
 
 class FakeFetch:
@@ -128,12 +131,15 @@ class FakeFetch:
 class Harness(unittest.TestCase):
     def setUp(self):
         self.saved = (net.fetch_once, net.fetch_bytes, net.is_public_host, site.time.sleep)
+        self.saved_driver = chrome.driver
+        chrome.driver = lambda choice, **kw: (None, "no browser in tests")
         net.is_public_host = lambda host: True
         site.time.sleep = lambda s: None
         net.fetch_bytes = lambda url, cap, content_types=None, sleep=None: (b"GIF89a\x01\x00\x01\x00" + b"\x00" * 10, "image/gif")
 
     def tearDown(self):
         net.fetch_once, net.fetch_bytes, net.is_public_host, site.time.sleep = self.saved
+        chrome.driver = self.saved_driver
 
     def cli(self, *argv, expect=0):
         out, err = StringIO(), StringIO()
@@ -172,12 +178,11 @@ class ImportTests(Harness):
         pages = dict(SITE, **{"https://acme.com/feed": FEED})
         net.fetch_once = FakeFetch(pages)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--ignore-robots", "--no-sitemap", "--delay", "0",
-                     "--per-template", "0")
+            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--delay", "0")
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
             summary, err = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01",
-                                    "--static", "--delay", "0")
+                                    "--static", "--images", "content")   # a survey fetches none; this asks for them
             self.assertIn("1 pages (rss 1)", err)                       # the 2023 post stays out
             with open(os.path.join(out, "pages", "blog--one.md")) as f:
                 text = f.read()
@@ -193,7 +198,7 @@ class ImportTests(Harness):
     def test_import_names_the_collections_when_the_template_is_wrong(self):
         net.fetch_once = FakeFetch(SITE)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--ignore-robots", "--no-sitemap", "--delay", "0")
+            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--delay", "0")
             _, err = self.cli("import", "--out", out, "--template", "product", "--static", expect=2)
             self.assertIn("no pages of template 'product'", err)
 
@@ -203,99 +208,68 @@ class ImportTests(Harness):
                               % LONG.replace("roofs", "gutters")})
         net.fetch_once = FakeFetch(pages)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--ignore-robots", "--no-sitemap", "--delay", "0")
+            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--delay", "0")
             self.assertTrue(os.path.isfile(os.path.join(out, "pages", "blog--one.md")))
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
-            _, err = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01", "--static", "--delay", "0")
+            _, err = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01", "--static")
             self.assertIn("1 pages (rss 1)", err)
             with open(os.path.join(out, "pages", "blog--one.md")) as f:
                 self.assertIn('fetcher: "rss"', f.read())
 
 
-class FakeFirecrawl(http.server.BaseHTTPRequestHandler):
-    status = 200
-    seen = []
-
-    def log_message(self, *a):
-        pass
-
-    def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        FakeFirecrawl.seen.append((self.path, self.headers.get("Authorization"), body))
-        if FakeFirecrawl.status != 200:
-            self.send_response(FakeFirecrawl.status)
-            self.end_headers()
-            return
-        if self.path == "/v2/map":
-            out = {"success": True, "links": [{"url": "https://acme.com/about"}, {"url": "https://other.com/x"}]}
-        else:
-            html = SITE.get(body["url"])
-            out = {"success": True, "data": {"rawHtml": html or "", "metadata": {"statusCode": 200 if html else 404,
-                                                                                   "url": body["url"]}}}
-        data = json.dumps(out).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-
-class FirecrawlTests(Harness):
-    def setUp(self):
-        super().setUp()
-        self.server = http.server.HTTPServer(("127.0.0.1", 0), FakeFirecrawl)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.env = {k: os.environ.get(k) for k in ("FIRECRAWL_API_KEY", "FIRECRAWL_API_URL")}
-        os.environ["FIRECRAWL_API_KEY"] = "fc-test"
-        os.environ["FIRECRAWL_API_URL"] = "http://127.0.0.1:%d" % self.server.server_port
-        FakeFirecrawl.status, FakeFirecrawl.seen = 200, []
-        net.fetch_once = FakeFetch({})               # nothing is fetched here: Firecrawl does it
-
-    def tearDown(self):
-        self.server.shutdown()
-        for k, v in self.env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        super().tearDown()
-
-    def test_pages_come_through_firecrawl(self):
-        with tempfile.TemporaryDirectory() as out:
-            summary, _ = self.cli("site", "https://acme.com/", "--out", out, "--fetcher", "firecrawl", "--ignore-robots",
-                                  "--no-sitemap", "--delay", "0", "--images", "none")
-            self.assertEqual(summary["pages"], 2)
-            self.assertEqual([p for p, _, _ in FakeFirecrawl.seen][:1], ["/v2/map"])
-            self.assertEqual(FakeFirecrawl.seen[0][1], "Bearer fc-test")
-            self.assertEqual(net.fetch_once.asked, [])                # not one request of our own to the site
-            with open(os.path.join(out, "pages", "about.md")) as f:
-                self.assertIn('fetcher: "firecrawl"', f.read())
+    def test_a_wordpress_site_imports_every_post_and_page_with_no_template(self):
+        api = "https://acme.com/wp-json/wp/v2/"
+        post = {"id": 1, "link": "https://acme.com/2025/06/storm-season/", "date": "2025-06-03T10:00:00", "author": 7,
+                "categories": [3], "title": {"rendered": "Storm season"},
+                "content": {"rendered": "<p>%s Storms.</p>" % LONG.replace("roofs", "storms")}}
+        page = {"id": 2, "link": "https://acme.com/warranty/", "date": "2024-01-02T00:00:00", "author": 7, "categories": [],
+                "title": {"rendered": "Warranty"}, "content": {"rendered": "<p>%s Ten years.</p>" % LONG.replace("roofs", "warranty")}}
+        wp = {api + "posts?per_page=1": json.dumps([{"id": 1}]),
+              api + "users?per_page=100&page=1&_embed=0": json.dumps([{"id": 7, "name": "Jane"}]),
+              api + "categories?per_page=100&page=1&_embed=0": json.dumps([{"id": 3, "name": "News"}]),
+              api + "posts?per_page=100&page=1&_embed=0": json.dumps([post]),
+              api + "pages?per_page=100&page=1&_embed=0": json.dumps([page])}
+        net.fetch_once = FakeFetch(dict(SITE, **wp))
+        with tempfile.TemporaryDirectory() as root:
+            out = os.path.join(root, "raw", "site", "acme.com")
+            self.cli("brand", "https://acme.com/", "--out", out, "--static", "--delay", "0")
+            with open(os.path.join(root, "raw", "site", "_sites.json")) as f:
+                self.assertIn('"wp_imported": false', f.read())
+            summary, err = self.cli("import", "--out", out, "--source", "wp", "--static")
+            self.assertIn("2 pages (wp-rest 2)", err)
+            with open(os.path.join(out, "pages", "2025--06--storm-season.md")) as f:
+                text = f.read()
+            self.assertIn('author: "Jane"', text)
+            self.assertIn('categories: ["News"]', text)
+            self.assertTrue(os.path.isfile(os.path.join(out, "pages", "warranty.md")))
+            with open(os.path.join(root, "raw", "site", "_sites.json")) as f:
+                reg = json.load(f)["latest"]
+            self.assertEqual((reg["wp_imported"], reg["profile"]), (True, "brand"))   # the folder stays a brand folder
             with open(os.path.join(out, "_index", "run.json")) as f:
-                # the home page and about kept; the two blog links it found answered 404
-                self.assertEqual(json.load(f)["firecrawl_calls"], {"scrape": 4, "map": 1})
+                run = json.load(f)
+            self.assertEqual((run["command"], run["images"]["mode"]), ("import", "brand"))
+            # one collection of a WordPress site is not the whole site imported
+            with open(os.path.join(root, "raw", "site", "_sites.json"), "w") as f:
+                json.dump({"entries": [dict(reg, wp_imported=False)], "latest": dict(reg, wp_imported=False)}, f)
+            self.cli("import", "--out", out, "--template", "/{n}/{n}/*", "--static")
+            with open(os.path.join(root, "raw", "site", "_sites.json")) as f:
+                self.assertFalse(json.load(f)["latest"]["wp_imported"])
+            # a source that is not WordPress imports one collection only
+            _, err = self.cli("import", "--out", out, "--source", "rss", "--static", expect=2)
+            self.assertIn("--source rss imports one collection: name it with --template", err)
+            # a site with no WordPress API and no --template is told what to pass
+            net.fetch_once = FakeFetch(SITE)
+            _, err = self.cli("import", "--out", out, "--static", expect=2)
+            self.assertIn("needs --template", err)
 
-    def test_no_credits_stops_the_crawl(self):
-        FakeFirecrawl.status = 402
-        with tempfile.TemporaryDirectory() as out:
-            _, err = self.cli("site", "https://acme.com/", "--out", out, "--fetcher", "firecrawl", "--ignore-robots",
-                              "--no-sitemap", "--delay", "0", expect=3)
-            self.assertIn("out of credits", err)
 
-    def test_no_key_says_how_to_get_one(self):
-        os.environ.pop("FIRECRAWL_API_KEY")
-        with tempfile.TemporaryDirectory() as out:
-            _, err = self.cli("site", "https://acme.com/", "--out", out, "--fetcher", "firecrawl", expect=3)
-            self.assertIn('request_connection("firecrawl"', err)
-
-    def test_throttling_is_waited_out(self):
-        waits = []
-        client = firecrawl.Client("fc-test", os.environ["FIRECRAWL_API_URL"], sleep=waits.append)
-        FakeFirecrawl.status = 429
-        with self.assertRaises(firecrawl.FirecrawlError) as e:
-            client.scrape("https://acme.com/")
-        self.assertFalse(e.exception.fatal)
-        self.assertEqual(len(waits), net.MAX_RETRIES)
+class StylesTests(Harness):
+    def test_styles_no_page_rendered_are_said_to_be_skipped(self):
+        net.fetch_once = FakeFetch(SITE)
+        with tempfile.TemporaryDirectory() as out:                 # no browser here (chrome.driver stubbed)
+            summary, _ = self.cli("site", "https://acme.com/", "--out", out, "--styles", "--delay", "0")
+            self.assertEqual(summary["styles_skipped"], "no page rendered in the browser")
 
 
 if __name__ == "__main__":

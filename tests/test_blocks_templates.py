@@ -44,7 +44,7 @@ class BlockTests(unittest.TestCase):
     def test_site_chrome_flagged_and_left_out(self):
         body = "<header><nav><a href='/'>Home</a></nav></header><main><p>Body</p></main><footer><p>© Acme</p></footer>"
         self.assertEqual(md_of(body), "Body\n")
-        self.assertIn("© Acme", md_of(body, keep_chrome=True))
+        self.assertTrue(any(b.get("chrome") and "© Acme" in b["text"] for b in blocks_of(body, URL)))
 
     def test_an_articles_own_header_is_content(self):
         md = md_of("<main><article><header><h1>Storm season</h1><p>12 May 2026</p></header><p>Text</p></article></main>")
@@ -82,21 +82,10 @@ class BlockTests(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertNotEqual(a, page)
 
-    def test_extract_runs_one_render(self):
-        seen = {}
-
-        class Proc:
-            returncode, stdout = 0, b'{"html": "<html><body><p>hi</p></body></html>", "styles": {"fonts": []}}'
-
-        def runner(cmd, **kw):
-            seen["cmd"] = cmd
-            return Proc()
-
-        got = browser.extract("https://acme.com/", "/bin/obscura", styles=True, runner=runner)
-        self.assertEqual(got["styles"], {"fonts": []})
-        self.assertIn("--eval", seen["cmd"])
-        self.assertIn("true ? JSON.parse", seen["cmd"][-1])
-        self.assertIsNone(browser.extract("https://acme.com/", "/bin/o", runner=lambda c, **k: type("P", (), {"returncode": 1, "stdout": b""})()))
+    def test_one_script_asks_for_the_page_and_maybe_its_styles(self):
+        self.assertIn("true ? JSON.parse", browser.extract_js(styles=True))
+        self.assertIn("false ? JSON.parse", browser.extract_js(styles=False))
+        self.assertNotIn("STYLES_JS", browser.extract_js())
 
 
 class TemplateTests(unittest.TestCase):

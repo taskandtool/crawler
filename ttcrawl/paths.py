@@ -6,15 +6,14 @@
       shots/<name>/           screenshot strips
       structured/<name>.json  per-page structured data, and business.json
       docs/                   the documents the pages link to
-      _index/                 the small ledger: inventory, templates, furniture, media,
+      _index/                 the index files: inventory, templates, furniture, media,
                               facts, reviews, styles, common lines, the run, the manifest
       _cache/                 what was read, one file per page, so a crawl can resume
                               and `add` can write the folder again
     raw/audit/<host>/         audits and launch checks (reports only; they never touch pages)
 
-`_index/` stays small whatever the site's size, so it can be mirrored to
-another app when the pages and images cannot. A folder can be frozen (the
-old site at launch): nothing writes into it again.
+`_index/` stays small whatever the site's size, so it can be copied or
+shared where the pages and images cannot.
 """
 import json
 import os
@@ -22,7 +21,6 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 PAGES, IMAGES, SHOTS, STRUCTURED, DOCS, INDEX, CACHE = "pages", "images", "shots", "structured", "docs", "_index", "_cache"
-FROZEN = "frozen.json"
 
 
 def host_of(url):
@@ -47,22 +45,15 @@ def the_site(root="raw"):
     return found[0] if len(found) == 1 else None
 
 
-def ledger(folder, name):
-    """A ledger file of a crawl folder, new layout first, then a 0.1.x one's."""
-    new = index(folder, name)
-    return new if os.path.isfile(new) or not os.path.isfile(os.path.join(folder, "_" + name)) else os.path.join(folder, "_" + name)
-
-
 def today():
     return datetime.now(timezone.utc).date().isoformat()
 
 
 def register(path, key, entry, defaults=None):
-    """Upsert one entry into a small registry file at a fixed path (the
-    starter apps' suggestion conditions can only name fixed paths; the site
-    and audit folders carry the host in theirs). An entry is merged into the
-    one it replaces, so a flag another command set survives; `defaults` fill
-    what neither has."""
+    """Upsert one entry into a small registry file at a fixed path, so a
+    reader that cannot know the host still finds every folder. An entry is
+    merged into the one it replaces, so a flag another command set survives;
+    `defaults` fill what neither has."""
     try:
         with open(path) as f:
             data = json.load(f)
@@ -85,10 +76,10 @@ SITE_FLAGS = {"docs_fetched": False, "wp_imported": False}
 
 def register_site(out, entry):
     """raw/site/_sites.json: every site folder beside `out`, newest first,
-    with the flags a suggestion can test ("docs_fetched": false until
-    `tt-crawl docs` ran, "wp_imported": false until `tt-crawl wp` did). Only
-    in the standard layout: a crawl into a folder of its own choosing leaves
-    the folder around it alone."""
+    with what has been done to it ("docs_fetched": false until `tt-crawl
+    docs` ran, "wp_imported": false until `tt-crawl import` brought the
+    WordPress content in). Only in the standard layout: a crawl into a folder
+    of its own choosing leaves the folder around it alone."""
     parent = os.path.dirname(out.rstrip("/")) or "."
     if os.path.basename(parent) in ("site", "external"):
         register(os.path.join(parent, "_sites.json"), "folder", dict(entry, folder=out.rstrip("/")), SITE_FLAGS)
@@ -104,26 +95,3 @@ def register_report(report_path, name, entry):
 
 def index(out, name):
     return os.path.join(out, INDEX, name)
-
-
-def old_layout(out):
-    """A folder a tt-crawl before 0.2 wrote (pages and ledger at its root)."""
-    return os.path.isfile(os.path.join(out, "_manifest.json")) or os.path.isfile(os.path.join(out, "_inventory.json"))
-
-
-def frozen(out):
-    """The freeze note of a frozen folder, or None."""
-    try:
-        with open(index(out, FROZEN)) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def freeze(out, reason=""):
-    os.makedirs(os.path.join(out, INDEX), exist_ok=True)
-    note = {"frozen_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-            "reason": reason}
-    with open(index(out, FROZEN), "w") as f:
-        json.dump(note, f, indent=2)
-    return note

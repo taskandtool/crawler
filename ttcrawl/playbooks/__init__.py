@@ -1,7 +1,7 @@
 """The playbooks: which tt-crawl commands to run for a job, in what order,
 what to read afterwards and what to tell the owner. Shipped with the
-package, so the steps always match the crawler that is installed; a skill
-points here (`tt-crawl playbook brand`) instead of copying flags."""
+package, so the steps always match the crawler that is installed: read
+`tt-crawl playbook brand` rather than copying its flags anywhere."""
 import os
 import sys
 
@@ -36,6 +36,6 @@ def run(args):
 
 
 def add_parser(sub):
-    p = sub.add_parser("playbook", help="the steps for a job (brand, survey, rebuild, import, audit, launch, reference, competitor)")
+    p = sub.add_parser("playbook", help="the steps for a job (brand, survey, rebuild, import, launch, competitor)")
     p.add_argument("name", nargs="?")
     p.set_defaults(func=run)

@@ -1,21 +1,27 @@
+import json
 import os
 import sys
+import tempfile
 import unittest
+import urllib.error
+import urllib.request
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fixtures import WP_HTML  # noqa: E402
-from ttcrawl import check, wp  # noqa: E402
+from ttcrawl import check, cli, importer, net  # noqa: E402
 
 
 def _resp(status, body=b"", headers=None, final=None, chain=None):
     return {"status": status, "body": body, "headers": headers or {}, "final_url": final, "chain": chain or [], "truncated": False}
 
 
-class WpTests(unittest.TestCase):
+class WordPressTests(unittest.TestCase):
     def test_detect_in_html(self):
-        self.assertEqual(wp.detect_in_html(WP_HTML), "https://blog.example.com/news/wp-json/")
-        self.assertIsNone(wp.detect_in_html("<html></html>"))
+        self.assertEqual(importer.wp_api_link(WP_HTML), "https://blog.example.com/news/wp-json/")
+        self.assertIsNone(importer.wp_api_link("<html></html>"))
 
     def test_api_base_uses_the_page_hint_and_falls_back(self):
         calls = []
@@ -28,8 +34,8 @@ class WpTests(unittest.TestCase):
                 return _resp(200, b'[{"id":1}]')
             return _resp(404)
 
-        self.assertEqual(wp.api_base("https://blog.example.com/news/", fetch=fetch), "https://blog.example.com/news/wp-json")
-        self.assertIsNone(wp.api_base("https://plain.example.com/", fetch=lambda u, **k: _resp(404)))
+        self.assertEqual(importer.wp_api_base("https://blog.example.com/news/", fetch=fetch), "https://blog.example.com/news/wp-json")
+        self.assertIsNone(importer.wp_api_base("https://plain.example.com/", fetch=lambda u, **k: _resp(404)))
 
     def test_fetch_all_paginates(self):
         pages = {1: [{"id": 1}], 2: [{"id": 2}]}
@@ -39,20 +45,56 @@ class WpTests(unittest.TestCase):
             import json
             return _resp(200, json.dumps(pages.get(n, [])).encode(), {"X-WP-TotalPages": "2"})
 
-        self.assertEqual([i["id"] for i in wp.fetch_all("https://b.com/wp-json", "posts", fetch=fetch)], [1, 2])
-
-    def test_frontmatter(self):
-        item = {"title": {"rendered": "Hello &amp; welcome"}, "link": "https://b.com/hello", "date": "2026-01-02T10:00:00",
-                "modified": "2026-02-03T00:00:00", "author": 7, "status": "publish", "slug": "hello", "categories": [3]}
-        fm = wp.frontmatter(item, {7: "Jane"}, {3: "News"}, "posts")
-        self.assertIn('title: "Hello & welcome"', fm)
-        self.assertIn("type: wp_post", fm)
-        self.assertIn("date: 2026-01-02", fm)
-        self.assertIn('author: "Jane"', fm)
-        self.assertIn('categories: ["News"]', fm)
+        self.assertEqual([i["id"] for i in importer.wp_fetch_all("https://b.com/wp-json", "posts", fetch=fetch)], [1, 2])
 
 
 class CheckTests(unittest.TestCase):
+    def test_the_site_on_this_machine_may_be_checked(self):
+        for url in ("http://localhost:3000", "http://localhost", "http://127.0.0.1:8080/x"):
+            self.assertTrue(net.local_or_public_http_url(url), url)
+        for url in ("https://localhost:3000", "http://localhost.attacker.example", "http://10.0.0.5:3000",
+                    "http://169.254.169.254/", "file:///etc/passwd"):
+            self.assertFalse(net.local_or_public_http_url(url), url)
+
+    def test_check_runs_against_localhost(self):
+        with tempfile.TemporaryDirectory() as root:
+            inv = os.path.join(root, "inventory.json")
+            with open(inv, "w") as f:
+                json.dump({"start": "https://old.example.com/", "records": [
+                    {"url": "https://old.example.com/about", "status": 200, "file": "pages/about.md"}]}, f)
+            asked = []
+
+            def fetch_once(url, cap=0, timeout=0, method="GET"):
+                asked.append(url)
+                body = b"<html><head><title>About</title></head><body><h1>About</h1></body></html>"
+                return {"status": 200, "final_url": url, "chain": [], "headers": {}, "body": body, "truncated": False}
+
+            saved, cwd = net.fetch_once, os.getcwd()
+            net.fetch_once = fetch_once
+            os.chdir(root)
+            try:
+                with redirect_stdout(StringIO()) as out, redirect_stderr(StringIO()):
+                    args = cli.build_parser().parse_args(["check", "http://localhost:3000", "--inventory", inv])
+                    code = args.func(args)
+            finally:
+                net.fetch_once = saved
+                os.chdir(cwd)
+            self.assertEqual(code, 0)
+            self.assertIn("http://localhost:3000/about", asked)
+            self.assertEqual(json.loads(out.getvalue())["ok"], 1)
+
+    def test_a_local_site_redirects_within_itself_only(self):
+        guard = net._GuardedRedirect()
+        req = urllib.request.Request("http://localhost:3000/old")
+        self.assertEqual(guard.redirect_request(req, None, 301, "Moved", {}, "http://localhost:3000/new").full_url,
+                         "http://localhost:3000/new")
+        for elsewhere in ("http://localhost:5432/", "http://10.0.0.5/", "http://169.254.169.254/latest"):
+            with self.assertRaises(urllib.error.URLError):
+                guard.redirect_request(req, None, 301, "Moved", {}, elsewhere)
+        with self.assertRaises(urllib.error.URLError):     # a public site never redirects onto this machine
+            guard.redirect_request(urllib.request.Request("http://93.184.216.34/"), None, 301, "Moved", {},
+                                   "http://localhost:3000/")
+
     def test_map_url(self):
         self.assertEqual(check.map_url("https://old.com/about?x=1", "https://new.com"), "https://new.com/about?x=1")
         self.assertEqual(check.map_url("https://old.com/", "https://new.com"), "https://new.com/")

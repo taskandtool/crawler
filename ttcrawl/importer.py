@@ -1,5 +1,6 @@
 """`tt-crawl import`: bring one collection of a site across (its posts, its
-products, its events) into the folder a survey or crawl already wrote.
+products, its events) into the folder a survey or crawl already wrote; or,
+for a WordPress site, every post and page its REST API lists.
 
 Each page comes from the platform's own feed when it has one, which carries
 what a page's HTML loses or muddles: WordPress's REST API (the post's date,
@@ -12,15 +13,14 @@ like any other.
 """
 import html as htmlmod
 import json
-import os
 import re
 import sys
 import time
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlsplit
 
-from . import net, paths, wp
-from .site import CACHE_VERSION, _load_json, _start_run, load_robots, template_report
+from . import net, paths
+from .site import _start_run, folder_args, into_folder, load_robots, template_report
 
 SOURCES = ("auto", "wp", "rss", "shopify", "html")
 FEED_PATHS = ("/feed", "/feed/", "/rss.xml", "/atom.xml", "/feed.xml", "/index.xml", "/rss", "/blog/feed",
@@ -80,19 +80,89 @@ def _iso(date):
         return date or None
 
 
+def wp_api_base(site_url, fetch=net.fetch):
+    """The wp-json base when the site is WordPress with the REST API open,
+    else None."""
+    parts = urlsplit(site_url)
+    base = f"{parts.scheme}://{parts.netloc}"
+    candidates = []
+    path = parts.path.rstrip("/")
+    if path:
+        candidates.append(f"{base}{path}/wp-json/")
+    candidates += [f"{base}/wp-json/", f"{base}/?rest_route=/"]
+    # the page itself says where its API is (<link rel="https://api.w.org/">)
+    try:
+        page = fetch(site_url, cap=400_000)
+        hinted = wp_api_link(page["body"].decode("utf-8", "replace")) if page["status"] == 200 else None
+        if hinted and net.public_http_url(hinted):
+            candidates.insert(0, hinted if hinted.endswith("/") else hinted + "/")
+    except Exception:
+        pass
+    # The API root lists every route and can run to megabytes; one post is
+    # a small, sure sign instead.
+    for candidate in candidates:
+        base_url = candidate.rstrip("/") if "rest_route" not in candidate else candidate
+        try:
+            r = fetch(_wp_url(base_url, "/wp/v2/posts", "per_page=1"), cap=2_000_000)
+        except Exception:
+            continue
+        if r["status"] != 200:
+            continue
+        try:
+            data = json.loads(r["body"].decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if isinstance(data, list):
+            return base_url
+    return None
+
+
+def wp_api_link(html):
+    """The api.w.org link WordPress puts in every page's head (pure)."""
+    m = re.search(r"<link[^>]+rel=[\"']https://api\.w\.org/[\"'][^>]*href=[\"']([^\"']+)[\"']", html, re.I)
+    return m.group(1) if m else None
+
+
+def _wp_url(base, path, query):
+    if "rest_route" in base:
+        return f"{base}{path}&{query}"
+    return f"{base}{path}?{query}"
+
+
+def wp_fetch_all(base, kind, fetch=net.fetch, per_page=100, max_pages=50, extra=""):
+    """Every item of one REST collection, page by page."""
+    items, page = [], 1
+    while page <= max_pages:
+        r = fetch(_wp_url(base, f"/wp/v2/{kind}", f"per_page={per_page}&page={page}&_embed=0{extra}"), cap=20_000_000)
+        if r["status"] != 200:
+            break
+        try:
+            batch = json.loads(r["body"].decode("utf-8", "replace"))
+        except ValueError:
+            break
+        if not isinstance(batch, list) or not batch:
+            break
+        items.extend(batch)
+        total_pages = int((r["headers"].get("X-WP-TotalPages") or r["headers"].get("x-wp-totalpages") or "1"))
+        if page >= total_pages:
+            break
+        page += 1
+    return items
+
+
 def from_wordpress(start, fetch=net.fetch, since=None, want=0):
     """Posts and pages through the REST API; newest first, so --limit needs
     only its first pages, and --since is asked of the API itself."""
-    base = wp.api_base(start, fetch=fetch)
+    base = wp_api_base(start, fetch=fetch)
     if not base:
         return {}
     pages = min(50, want // 100 + 1) if want else 50
     extra = "&after=%sT00:00:00" % since if since else ""
-    authors = {u.get("id"): u.get("name", "") for u in wp.fetch_all(base, "users", fetch=fetch, per_page=100, max_pages=5)}
-    cats = {c.get("id"): c.get("name", "") for c in wp.fetch_all(base, "categories", fetch=fetch, per_page=100, max_pages=5)}
+    authors = {u.get("id"): u.get("name", "") for u in wp_fetch_all(base, "users", fetch=fetch, per_page=100, max_pages=5)}
+    cats = {c.get("id"): c.get("name", "") for c in wp_fetch_all(base, "categories", fetch=fetch, per_page=100, max_pages=5)}
     out = {}
     for kind in ("posts", "pages"):
-        for it in wp.fetch_all(base, kind, fetch=fetch, max_pages=pages, extra=extra):
+        for it in wp_fetch_all(base, kind, fetch=fetch, max_pages=pages, extra=extra):
             link = net.normalize_url(it.get("link") or "")
             if not link:
                 continue
@@ -162,30 +232,43 @@ def item_html(item):
 
 
 def run(args):
-    state = _load_json(os.path.join(args.out or "", paths.CACHE, "crawl.json")) if args.out else None
-    if not state or state.get("version") != CACHE_VERSION:
-        sys.stderr.write("import needs --out: a folder a survey or crawl of the site wrote (it reads its templates)\n")
+    found = into_folder(args, "import")
+    if not found:
         return 2
-    args.start_url = state["start"]
+    profile, settings = found
+    if not args.template and args.source not in ("auto", "wp"):
+        sys.stderr.write("--source %s imports one collection: name it with --template\n" % args.source)
+        return 2
 
     def body(crawl):
         crawl.load_state()
-        crawl.robots, _ = load_robots(crawl.start, args.ignore_robots)
-        urls = [u for u, r in crawl.records.items() if r.get("template") == args.template]
+        crawl.robots, _ = load_robots(crawl.start)
+        sources = [("wp", lambda st: from_wordpress(st, since=args.since, want=args.limit))]
+        if args.template:
+            sources += [("rss", from_feeds), ("shopify", from_shopify)]
+        items, used = {}, []
+        for src, get in sources:
+            if args.source in ("auto", src):
+                got = get(crawl.start)
+                if got:
+                    used.append("%s (%d)" % (src, len(got)))
+                    for u, it in got.items():
+                        items.setdefault(u, it)
+        wordpress = not args.template and any(it["source"] == "wp-rest" for it in items.values())
+        if args.template:
+            urls = [u for u, r in crawl.records.items() if r.get("template") == args.template]
+        elif wordpress:
+            # no template: every post and page the WordPress API lists
+            urls = [u for u, it in items.items() if it["source"] == "wp-rest" and net.same_site(u, crawl.root_host)]
+        else:
+            urls = []
         if not urls:
             rows = [t for t in template_report(crawl.records) if t["collection"]]
-            sys.stderr.write("no pages of template %r; the collections are: %s\n" % (
-                args.template, ", ".join("%s (%d)" % (t["template"], t["count"]) for t in rows) or "none"))
+            sys.stderr.write("%s; the collections are: %s\n" % (
+                "no pages of template %r" % args.template if args.template
+                else "no WordPress REST API answered, so import needs --template",
+                ", ".join("%s (%d)" % (t["template"], t["count"]) for t in rows) or "none"))
             return 2
-        items, used = {}, []
-        for src, get in (("wp", lambda s: from_wordpress(s, since=args.since, want=args.limit)),
-                         ("rss", from_feeds), ("shopify", from_shopify)):
-            if args.source in ("auto", src):
-                found = get(crawl.start)
-                if found:
-                    used.append("%s (%d)" % (src, len(found)))
-                    for u, it in found.items():
-                        items.setdefault(u, it)
         # A page's date: its feed item's, else the sitemap's lastmod. With
         # --since, a page dated earlier, or with no date to judge by, stays out.
         chosen = []
@@ -202,6 +285,9 @@ def run(args):
         for i, (u, it, _date) in enumerate(chosen):
             crawl.seen.add(u)
             rec = crawl.record(u)
+            if not rec["template"]:
+                crawl.templates.add(u)
+                rec["template"] = crawl.templates.of(u)
             rec["reason"] = None
             crawl.skipped = [s for s in crawl.skipped if s["url"] != u]
             crawl.forget(u)
@@ -220,20 +306,27 @@ def run(args):
                     time.sleep(crawl.pace["delay"])
                 crawl.read(u)
                 counts["html"] = counts.get("html", 0) + 1
+        what = args.template or "wordpress posts and pages"
         crawl.import_stats = {"template": args.template, "items": len(chosen), "by_source": counts,
                               "sources_found": used, "since": args.since, "limit": args.limit}
-        sys.stderr.write("import %s: %d pages (%s)\n" % (args.template, len(chosen),
+        sys.stderr.write("import %s: %d pages (%s)\n" % (what, len(chosen),
                                                           ", ".join("%s %d" % kv for kv in counts.items()) or "none"))
-        return crawl.write()
-    return _start_run(args, "import", body)
+        code = crawl.write()
+        if wordpress:         # the whole WordPress site, not one collection of it
+            paths.register_site(crawl.out, {"wp_imported": True})
+        return code
+    return _start_run(args, profile, body, settings)
 
 
 def add_parser(sub):
-    from .site import _common_args
-    p = sub.add_parser("import", help="one collection (posts, products) into a crawled site's folder, from its own feed when it has one")
-    p.add_argument("--template", required=True, help="the template to import, as _index/templates.md names it (post, /blog/*)")
-    p.add_argument("--source", choices=SOURCES, default="auto", help="where items come from (default auto: wp, rss, shopify, then HTML)")
+    p = sub.add_parser("import", help="a collection (posts, products) into a crawled site's folder from its own feed; "
+                                      "a WordPress site's posts and pages with no --template")
+    p.add_argument("--template", default=None,
+                   help="the template to import, as _index/templates.md names it (post, /blog/*); without one, every "
+                        "post and page of a WordPress site")
+    p.add_argument("--source", choices=SOURCES, default="auto",
+                   help="where items come from (default auto: every feed the site answers, a page none carries read as HTML)")
     p.add_argument("--since", default=None, help="only items dated on or after YYYY-MM-DD")
     p.add_argument("--limit", type=int, default=0, help="at most N items, newest first")
-    _common_args(p, 100_000, "content")
-    p.set_defaults(func=run, profile="import", no_sitemap=True, resume=False, external=False)
+    folder_args(p)
+    p.set_defaults(func=run)

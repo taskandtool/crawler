@@ -1,5 +1,6 @@
-"""`tt-crawl site`, `tt-crawl survey` and `tt-crawl add`: read a site into its
-folder (paths.py has the layout).
+"""`tt-crawl site`, `survey`, `brand`, `pages` and `add`: read a site into
+its folder (paths.py has the layout). The four crawls are one crawl with
+different defaults.
 
 A crawl reads pages, then writes everything from what it read:
 
@@ -8,13 +9,13 @@ A crawl reads pages, then writes everything from what it read:
   sitemap, then everything else found along the way (templates.Frontier),
   capped per template and per section when sampling (templates.Sampler).
   Each page is asked for plainly first (status, redirects, throttling), then
-  rendered once through Obscura when it is installed (static otherwise), and
-  parsed into its content blocks, links, forms, images, reviews and
-  structured data. Each page read is saved to `_cache/pages/` as it is read,
+  rendered once in the browser (`--browser`, chrome by default; none with
+  `--static`), and parsed into its content blocks, links, forms, images,
+  reviews and structured data. Each page read is saved to `_cache/pages/` as it is read,
   and the crawl's place every few pages, so a long crawl can `--resume`.
 - **write**: the page files (frontmatter, then the page's own text,
   verbatim), the pictures (each once, at its largest, linked from every page
-  that shows it), and the ledger in `_index/`: inventory, templates,
+  that shows it), and the index files in `_index/`: inventory, templates,
   furniture, media, facts, reviews, styles, common lines, the run and the
   manifest. `add` reads more pages into a folder and writes it all again
   from the cache, without reading the rest.
@@ -22,7 +23,6 @@ A crawl reads pages, then writes everything from what it read:
 No step involves a model: a crawl of thousands of pages costs the machine's
 time and nothing else.
 """
-import argparse
 import hashlib
 import json
 import math
@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
-from . import __version__, browser, chrome, dom, firecrawl, inventory, net, paths, structured
+from . import __version__, chrome, dom, inventory, net, paths, structured
 from .blocks import fingerprint, to_markdown
 from .facts import Facts, jsonld_reviews, reviews as page_reviews
 from .furniture import page_furniture, site_furniture
@@ -48,7 +48,6 @@ from .text import (MD_IMAGE_RE, MIN_MARKDOWN_CHARS, NearDuplicates, content_dige
 
 DEFAULT_MAX_PAGES = 100
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
-MAX_VIDEO_BYTES = 80 * 1024 * 1024
 MAX_SITEMAPS = 50
 STYLE_PAGES = 5
 MAX_DELAY_S = 8
@@ -60,15 +59,12 @@ CACHE_VERSION = 2
 FURNITURE_SHARE = 0.6
 # What the parsed page keeps in the cache: enough to write the folder again.
 PARSED_KEEP = ("url", "title", "lang", "meta", "meta_description", "canonical", "links", "internal_links",
-               "images", "forms", "landmark_lines", "has_landmarks", "h1", "videos")
+               "images", "forms", "landmark_lines", "has_landmarks", "h1")
 
 
-def load_robots(start_url, ignore):
+def load_robots(start_url):
     from urllib import robotparser
     rp = robotparser.RobotFileParser()
-    if ignore:
-        rp.parse(["User-agent: *", "Allow: /"])
-        return rp, []
     parts = urlsplit(start_url)
     try:
         text = net.fetch_text(f"{parts.scheme}://{parts.netloc}/robots.txt", cap=200_000)
@@ -143,19 +139,23 @@ def _now():
 class Crawl:
     """One run into one folder: what was read, and how to write it."""
 
-    def __init__(self, args, start, profile):
+    def __init__(self, args, start, profile, settings=None):
         self.args, self.start, self.profile = args, start, profile
+        # What `add` and `import` keep for this folder: the pictures and the
+        # page limit the crawl that made it chose.
+        self.settings = settings or {"images": args.images, "limit": args.max_pages}
         self.root_host = urlsplit(start).hostname or ""
         self.out = args.out
-        self.firecrawl = firecrawl.Client.from_env() if getattr(args, "fetcher", "local") == "firecrawl" else None
-        self.obscura = None if args.static or self.firecrawl else browser.find_obscura()
-        self.structured_dir = getattr(args, "structured_out", None) or os.path.join(self.out, paths.STRUCTURED)
+        # --static is no browser at all: no render, no screenshots, no styles
+        self.driver, self.browser_note = (None, None) if args.static else chrome.driver(args.browser)
+        if args.static and (args.screenshots or args.styles):
+            self.browser_note = "--static: no browser, so no screenshots or styles"
+            args.screenshots = args.styles = False
+        self.structured_dir = os.path.join(self.out, paths.STRUCTURED)
         manifest = _load_json(paths.index(self.out, "manifest.json")) or {}
         self.earlier = {p["url"]: p["file"] for p in (manifest.get("earlier") or []) + (manifest.get("pages") or [])
                         if p.get("url") and p.get("file")}
         self.previous_hashes = {p["url"]: p.get("hash") for p in manifest.get("pages") or [] if p.get("url")}
-        self.shooter = chrome.shooter(getattr(args, "shots_engine", "auto"), self.obscura) \
-            if getattr(args, "screenshots", False) else None
         # A site that throttles us once is asked more gently for the rest of the run.
         self.pace = {"delay": args.delay, "throttled": 0}
         self.records = {start: inventory.new_record(start)}
@@ -163,7 +163,7 @@ class Crawl:
         self.skipped = []
         self.templates = Templates()
         self.frontier = Frontier()
-        self.sampler = Sampler(getattr(args, "per_template", None), getattr(args, "per_section", None))
+        self.sampler = Sampler(args.per_template, args.per_section)
         self.seen = set()
         self.kept_hashes, self.near = set(), NearDuplicates()
         self.style_readings = []
@@ -201,31 +201,17 @@ class Crawl:
 
     # ── discovery ──
     def seed(self):
-        self.robots, robots_sitemaps = load_robots(self.start, self.args.ignore_robots)
+        self.robots, robots_sitemaps = load_robots(self.start)
         self.frontier.add(self.start, Frontier.START)
         self.templates.add(self.start)
-        if self.firecrawl:
-            # Firecrawl's map: every URL it knows, one call, beside the sitemap
-            try:
-                for u in self.firecrawl.map(self.start):
-                    n = net.normalize_url(u)
-                    if n and net.same_site(n, self.root_host) and net.crawlable(n):
-                        self.record(n)
-                        self.templates.add(n)
-                        self.frontier.add(n, Frontier.SITEMAP)
-            except firecrawl.FirecrawlError as e:
-                if e.fatal:
-                    raise
-                sys.stderr.write("firecrawl map: %s\n" % e)
-        if not self.args.no_sitemap:
-            for u, lastmod, sm in sitemap_urls(self.start, robots_sitemaps, self.root_host):
-                n = net.normalize_url(u)
-                if not n:
-                    continue
-                rec = self.record(n)
-                rec["in_sitemap"], rec["lastmod"] = True, lastmod or rec["lastmod"]
-                self.templates.add(n, sm)
-                self.frontier.add(n, Frontier.SITEMAP)
+        for u, lastmod, sm in sitemap_urls(self.start, robots_sitemaps, self.root_host):
+            n = net.normalize_url(u)
+            if not n:
+                continue
+            rec = self.record(n)
+            rec["in_sitemap"], rec["lastmod"] = True, lastmod or rec["lastmod"]
+            self.templates.add(n, sm)
+            self.frontier.add(n, Frontier.SITEMAP)
 
     def found(self, links, from_start):
         """Queue the same-site links a page carries, each through the door it
@@ -293,31 +279,22 @@ class Crawl:
         self.absorb(url, html, rendered=rendered, styles=styles, fetcher=fetcher, from_start=from_start)
 
     def get(self, url):
-        """The page's HTML, or None (skipped, with the reason recorded).
-        Through Firecrawl when --fetcher firecrawl; else the plain request
-        first, for the status, the final URL and the headers (and the page
-        itself when there is no browser): a redirect, an error or a throttled
-        answer then costs no render. Then one render through Obscura."""
+        """The page's HTML, or None (skipped, with the reason recorded). The
+        plain request first, for the status, the final URL and the headers
+        (and the page itself when there is no browser): a redirect, an error
+        or a throttled answer then costs no render. Then one render in the
+        browser."""
         rec = self.record(url)
-        if self.firecrawl:
+        try:
+            resp = net.fetch(url, method="GET" if self.driver is None else "HEAD")
+        except Exception:
+            resp = None
+        if self.driver and (resp is None or resp["status"] == 405):
+            # some servers refuse or drop a HEAD; ask once more the plain way
             try:
-                page = self.firecrawl.scrape(url)
-            except firecrawl.FirecrawlError as e:
-                if e.fatal:
-                    raise
-                return self.skip(url, "firecrawl_failed")
-            resp = {"status": page["status"], "final_url": page["final_url"], "headers": {}, "body": b""}
-        else:
-            try:
-                resp = net.fetch(url, method="GET" if self.obscura is None else "HEAD")
+                resp = net.fetch(url)
             except Exception:
                 resp = None
-            if self.obscura and (resp is None or resp["status"] == 405):
-                # some servers refuse or drop a HEAD; ask once more the plain way
-                try:
-                    resp = net.fetch(url)
-                except Exception:
-                    resp = None
         if resp is None:
             return self.skip(url, "fetch_failed")
         rec["status"], rec["final_url"] = resp["status"], resp["final_url"]
@@ -336,15 +313,13 @@ class Crawl:
             return self.skip(url, "redirect")
         if resp["status"] and resp["status"] >= 400:
             return self.skip(url, "http_%d" % resp["status"])
-        if self.firecrawl:
-            return (page["html"], True, None, "firecrawl") if page["html"].strip() else self.skip(url, "fetch_failed")
 
         # One render: the page's HTML as the browser built it, annotated with
         # what only the browser knows, and the computed styles when asked.
         html, rendered, styles = None, False, None
         want_styles = self.args.styles and len(self.style_readings) < self.args.style_pages
-        if self.obscura:
-            got = browser.extract(url, self.obscura, styles=want_styles)
+        if self.driver:
+            got = self.driver.render(url, styles=want_styles)
             if got:
                 html, rendered, styles = got["html"], True, got.get("styles")
         if html is None:
@@ -356,11 +331,11 @@ class Crawl:
             html = resp["body"].decode("utf-8", "replace")
         if not html or not html.strip():
             return self.skip(url, "fetch_failed")
-        return html, rendered, styles, "obscura" if rendered else "static"
+        return html, rendered, styles, self.driver.engine if rendered else "static"
 
     def absorb(self, url, html, rendered=False, styles=None, fetcher="static", from_start=False, front=None):
-        """Keep a page read by any route (a render, a static fetch, Firecrawl,
-        or an item a platform's own feed carried): its structured data, its
+        """Keep a page read by any route (a render, a static fetch, or an
+        item a platform's own feed carried): its structured data, its
         inventory record, the links it offers, and, unless it is empty or a
         duplicate, its blocks in the cache. `front` adds to its frontmatter
         (an import's date, author, categories)."""
@@ -416,8 +391,8 @@ class Crawl:
             "parsed": {k: parsed.get(k) for k in PARSED_KEEP}, "digest": digest, "minhash": sig}, indent=None)
         if name not in self.order:
             self.order.append(name)
-        if self.shooter:  # only the pages kept: a duplicate costs no capture
-            shot = self.shooter.shoot(url, os.path.join(self.out, paths.SHOTS, name))
+        if self.driver and self.args.screenshots:  # only the pages kept: a duplicate costs no capture
+            shot = self.driver.shoot(url, os.path.join(self.out, paths.SHOTS, name))
             if shot.get("strips"):
                 rec["screenshot"] = paths.SHOTS + "/" + name
             else:
@@ -425,7 +400,8 @@ class Crawl:
 
     # ── the crawl's place, for --resume and add ──
     def save_state(self):
-        state = {"version": CACHE_VERSION, "start": self.start, "profile": self.profile, "started": self.started,
+        state = {"version": CACHE_VERSION, "start": self.start, "profile": self.profile, "settings": self.settings,
+                 "started": self.started,
                  "records": self.records, "order": self.order, "seen": sorted(self.seen), "skipped": self.skipped,
                  "frontier": [[u, self.frontier.where[u]] for u in self.frontier],
                  "sampler": {"by_template": self.sampler.by_template, "by_section": self.sampler.by_section},
@@ -437,9 +413,10 @@ class Crawl:
         _dump(os.path.join(self.out, paths.CACHE, "crawl.json"), state, indent=None)
 
     def load_state(self):
-        state = _load_json(os.path.join(self.out, paths.CACHE, "crawl.json"))
-        if not state or state.get("version") != CACHE_VERSION:
-            return False
+        """The crawl's place from the cache, or None when there is none."""
+        state = saved_state(self.out)
+        if not state:
+            return None
         self.records = {u: dict(inventory.new_record(u), **r) for u, r in state["records"].items()}
         self.order = [n for n in state["order"] if os.path.isfile(self.cache_path(n))]
         self.seen, self.skipped = set(state["seen"]), state["skipped"]
@@ -455,13 +432,14 @@ class Crawl:
             self.owners[n] = u
         self.style_readings = state["style_readings"]
         self.pace["throttled"] = state.get("throttled", 0)
+        self.limit_reached = state.get("limit_reached", False)
         self.started = state.get("started") or self.started
         for n in self.order:
             page = self.cached(n)
             if page:
                 self.kept_hashes.add(page["digest"])
                 self.near.keep(page["minhash"])
-        return True
+        return state
 
     def forget(self, url):
         """Before a page is read again (add, import): its earlier copy is no
@@ -484,15 +462,17 @@ class Crawl:
                 yield page
 
     def _blocks(self, page, repeated):
-        if self.args.keep_boilerplate:
-            return page["blocks"]
         return [dict(b, chrome=True) if b["tag"] != "img" and norm_line(b["text"]) in repeated else b
                 for b in page["blocks"]]
 
     def write(self):
         args, out = self.args, self.out
-        keep_chrome = args.keep_boilerplate
-        repeated = set() if keep_chrome else repeated_lines(p["blocks"] for p in self.pages())
+        # what actually rendered the pages kept, not what was asked for
+        engines = sorted({p["fetcher"] for p in self.pages() if p["rendered"] and p["fetcher"] in ("chrome", "obscura")})
+        self.renderer = "+".join(engines) or None
+        if self.driver and self.driver.note:
+            self.browser_note = self.driver.note
+        repeated = repeated_lines(p["blocks"] for p in self.pages())
         common_lines, seen_lines = [], set()
         for page in self.pages():
             for t in _landmark_lines(page) + [b["text"] for b in page["blocks"] if b["tag"] != "img" and not b.get("chrome")
@@ -500,7 +480,7 @@ class Crawl:
                 if norm_line(t) not in seen_lines:
                     seen_lines.add(norm_line(t))
                     common_lines.append(t.strip())
-        if common_lines and not keep_chrome:
+        if common_lines:
             with open(paths.index(out, "common.md"), "w") as f:
                 f.write("<!-- the site's header, nav, and footer, and the lines that repeat on most pages "
                         "wherever the theme put them; removed from every page and kept here once. "
@@ -523,12 +503,11 @@ class Crawl:
         _dump(paths.index(out, "furniture.json"), {"site": site_view, "pages": furniture_pages})
         media.classify((site_view.get("logo") or {}).get("src"), paths.host_of(self.start).split(".")[0])
         fetched_images = self.fetch_images(media)
-        videos = self.fetch_videos() if getattr(args, "videos", False) else []
 
         written, manifest_pages = [], []
         for page in self.pages():
             url, rec = page["url"], self.record(page["url"])
-            md = to_markdown(self._blocks(page, repeated), keep_chrome=keep_chrome)
+            md = to_markdown(self._blocks(page, repeated))
             if not md.strip():
                 self.skip(url, "boilerplate_only")
                 continue
@@ -561,7 +540,7 @@ class Crawl:
         earlier = [{"url": u, "file": f} for u, f in sorted(self.earlier.items())
                    if u not in read_now and os.path.isfile(os.path.join(out, f))]
 
-        _dump(paths.index(out, "media.json"), media.to_json() + videos)
+        _dump(paths.index(out, "media.json"), media.to_json())
         business = structured.merge_business([(p["structured"]["url"], p["structured"]["jsonld"]) for p in self.pages()])
         _dump(os.path.join(self.structured_dir, "business.json"),
               business or {"note": "no LocalBusiness or Organization markup found on the crawled pages"})
@@ -587,7 +566,7 @@ class Crawl:
         styles = None
         if args.styles and self.style_readings:
             styles = merge_styles(self.style_readings)
-            styles["renderer"] = self.obscura
+            styles["renderer"] = self.renderer
             _dump(paths.index(out, "styles.json"), styles)
 
         templates = template_report(self.records)
@@ -600,27 +579,26 @@ class Crawl:
             skipped_by[s["reason"]] = skipped_by.get(s["reason"], 0) + 1
         unread = sum(1 for r in self.records.values() if r["reason"] in ("unread", "sampled_out"))
         images_on_disk = sum(1 for i in media.items.values() if i["file"])
+        limit = self.settings["limit"]
         manifest = {"start": self.start, "profile": self.profile, "pages": manifest_pages, "earlier": earlier,
-                    "skipped": self.skipped, "images": images_on_disk, "renderer": self.obscura, "limit": args.max_pages,
+                    "skipped": self.skipped, "images": images_on_disk, "renderer": self.renderer, "limit": limit,
                     "limit_reached": self.limit_reached, "discovered": len(self.records), "unread": unread,
-                    "common_lines": len(common_lines), "throttled": self.pace["throttled"],
-                    "structured_dir": self.structured_dir}
+                    "common_lines": len(common_lines), "throttled": self.pace["throttled"]}
         _dump(paths.index(out, "manifest.json"), manifest)
         inventory.write(self.records, os.path.join(out, paths.INDEX), self.start,
-                        {"limit": args.max_pages, "limit_reached": self.limit_reached, "renderer": self.obscura})
+                        {"limit": limit, "limit_reached": self.limit_reached, "renderer": self.renderer})
         self.save_state()
 
         not_fetched = {t["template"]: t["not_read"] for t in templates if t["not_read"]}
-        run = {"tool": "tt-crawl", "version": __version__, "profile": self.profile, "argv": sys.argv[1:],
-               "start": self.start, "started": self.started, "finished": _now(), "renderer": self.obscura,
-               "read": len(manifest_pages), "skipped": skipped_by, "limit": args.max_pages,
+        run = {"tool": "tt-crawl", "version": __version__, "command": args.command, "profile": self.profile,
+               "argv": sys.argv[1:], "start": self.start, "started": self.started, "finished": _now(),
+               "renderer": self.renderer, "browser_note": self.browser_note,
+               "read": len(manifest_pages), "skipped": skipped_by, "limit": limit,
                "limit_reached": self.limit_reached, "throttled": self.pace["throttled"],
                "per_template": self.sampler.per_template, "per_section": self.sampler.per_section,
                "images": {"mode": args.images, "on_disk": images_on_disk, "fetched_now": fetched_images,
                           "seen": len(media.items)},
-               "fetcher": "firecrawl" if self.firecrawl else "local",
                "import": getattr(self, "import_stats", None),
-               "firecrawl_calls": self.firecrawl.calls if self.firecrawl else None,
                "changes": {c: sum(1 for p in manifest_pages if p["change"] == c) for c in ("new", "changed", "same")},
                "not_fetched_by_template": not_fetched}
         _dump(paths.index(out, "run.json"), run)
@@ -632,7 +610,7 @@ class Crawl:
                                   "reviews": len(all_reviews), "wordpress": wordpress})
 
         summary = {"pages": len(manifest_pages), "discovered": len(self.records), "unread": unread,
-                   "limit": args.max_pages, "limit_reached": self.limit_reached, "skipped": len(self.skipped),
+                   "limit": limit, "limit_reached": self.limit_reached, "skipped": len(self.skipped),
                    "thin": sum(1 for p in manifest_pages if p["thin"]), "earlier_kept": len(earlier),
                    "new": run["changes"]["new"], "changed": run["changes"]["changed"],
                    "templates": len(templates), "collections": sum(1 for t in templates if t["collection"]),
@@ -640,12 +618,16 @@ class Crawl:
                    "screenshots": sum(1 for r in self.records.values() if r.get("screenshot")),
                    "images": images_on_disk, "images_seen": len(media.items),
                    "rendered": sum(1 for p in manifest_pages if p["rendered"]),
-                   "common_lines": len(common_lines), "renderer": self.obscura,
+                   "common_lines": len(common_lines), "renderer": self.renderer,
                    "inventory": len(self.records), "furniture_landmarks": site_view.get("has_landmarks", False),
                    "nav_items": len(site_view.get("nav", [])), "media": len(media.items),
                    "reviews": len(all_reviews), "facts": {k: len(v) for k, v in facts_json.items() if k in Facts.KINDS},
                    "business_markup": bool(business), "documents": sum(len(r["documents"]) for r in self.records.values()),
                    "styles_pages": (styles or {}).get("pages_read", 0), "out": out}
+        if self.browser_note:
+            summary["browser_note"] = self.browser_note
+        if args.styles and not self.style_readings:
+            summary["styles_skipped"] = "no page rendered in the browser"
         print(json.dumps(summary))
         return 0
 
@@ -663,7 +645,7 @@ class Crawl:
                 with open(path, "rb") as f:
                     by_bytes.setdefault(hashlib.sha256(f.read()).hexdigest(), k["file"])
         fetched = 0
-        for it in media.select(self.args.images, self.args.max_images):
+        for it in media.select(self.args.images):
             known = media.known.get(it["key"])
             if known and os.path.isfile(os.path.join(img_dir, known["file"])):
                 it.update(known)
@@ -697,33 +679,6 @@ class Crawl:
             if not it["file"] and known and os.path.isfile(os.path.join(img_dir, known["file"])):
                 it.update(known)
         return fetched
-
-    def fetch_videos(self):
-        """With --videos: each video file a page plays, under 80 MB. Players
-        (YouTube, Vimeo) are recorded in the structured data, never fetched."""
-        out, seen = [], set()
-        vid_dir = os.path.join(self.out, "videos")
-        for page in self.pages():
-            for src in page["parsed"].get("videos") or []:
-                if src in seen:
-                    continue
-                seen.add(src)
-                row = {"key": src, "kind": "video", "original": src, "file": None, "pages": [{"url": page["url"]}]}
-                host = urlsplit(src).hostname
-                data = ctype = None
-                if host and net.is_public_host(host):
-                    try:
-                        data, ctype = net.fetch_bytes(src, MAX_VIDEO_BYTES, content_types=("video/", "application/octet-stream"))
-                    except Exception:
-                        data = None
-                if data:
-                    os.makedirs(vid_dir, exist_ok=True)
-                    fname = image_file_name(src, src, extension(ctype, src))
-                    with open(os.path.join(vid_dir, fname), "wb") as f:
-                        f.write(data)
-                    row.update({"file": "../videos/" + fname, "bytes": len(data)})
-                out.append(row)
-        return out
 
 
 def frontmatter(fields):
@@ -824,28 +779,52 @@ def _landmark_lines(page):
     return out
 
 
-def _start_run(args, profile, body):
+def saved_state(out):
+    """The crawl's place a folder's cache holds, or None."""
+    state = _load_json(os.path.join(out, paths.CACHE, "crawl.json"))
+    return state if state and state.get("version") == CACHE_VERSION else None
+
+
+def folder_settings(state):
+    """What the crawl that made a folder chose, which `add` and `import`
+    keep: its profile, its pictures and its page limit (None when it
+    recorded none). A page added to a brand folder fetches brand pictures,
+    not every picture on it."""
+    s = state.get("settings")
+    if not s or not s.get("images"):
+        return None
+    return state["profile"], {"images": s["images"], "limit": s.get("limit")}
+
+
+def into_folder(args, command):
+    """For `add` and `import`: the folder a crawl wrote (--out, else the one
+    raw/site/<host>), its saved state, and the settings it keeps; or None
+    after saying why."""
+    args.out = args.out or paths.the_site()
+    state = saved_state(args.out) if args.out else None
+    if not state:
+        sys.stderr.write("%s needs --out: a folder a crawl wrote (it reads %s/crawl.json)\n" % (command, paths.CACHE))
+        return None
+    args.start_url = state["start"]
+    kept = folder_settings(state)
+    if not kept:
+        sys.stderr.write("%s has no recorded crawl settings; crawl it again\n" % args.out)
+        return None
+    profile, settings = kept
+    args.images = args.images or settings["images"]
+    args.max_pages = settings["limit"]
+    return profile, settings
+
+
+def _start_run(args, profile, body, settings=None):
     start = net.normalize_url(args.start_url)
     root_host = urlsplit(start or "").hostname or ""
     if not start or not root_host or not net.is_public_host(root_host):
         sys.stderr.write("refusing: start host is missing or not a public address\n")
         return 2
-    args.out = args.out or paths.site_dir(start, external=getattr(args, "external", False))
-    if paths.old_layout(args.out):
-        sys.stderr.write("%s was written by tt-crawl before 0.2 (pages and ledger at its root); move it to the new "
-                         "layout first with `tt-crawl relayout %s`\n" % (args.out, args.out))
-        return 2
-    note = paths.frozen(args.out)
-    if note:
-        sys.stderr.write("%s is frozen (%s%s): it keeps the site as it was. Crawl into another folder with --out.\n"
-                         % (args.out, note.get("frozen_at"), ", " + note["reason"] if note.get("reason") else ""))
-        return 2
+    args.out = args.out or paths.site_dir(start, external=args.external)
     os.makedirs(args.out, exist_ok=True)
-    try:
-        crawl = Crawl(args, start, profile)
-    except firecrawl.FirecrawlError as e:
-        sys.stderr.write("stopped: %s\n" % e)
-        return 3
+    crawl = Crawl(args, start, profile, settings)
 
     def throttled(url, status, wait):
         crawl.pace["throttled"] += 1
@@ -855,24 +834,25 @@ def _start_run(args, profile, body):
     net.on_throttle = throttled
     try:
         return body(crawl)
-    except firecrawl.FirecrawlError as e:
-        sys.stderr.write("stopped: %s\n" % e)
-        crawl.save_state()
-        return 3
     finally:
         net.on_throttle = None
-        if crawl.shooter:
-            crawl.shooter.stop()
+        if crawl.driver:
+            crawl.driver.stop()
 
 
 def run(args):
     def body(crawl):
-        if args.resume and crawl.load_state() and crawl.start == net.normalize_url(args.start_url):
-            crawl.robots, _ = load_robots(crawl.start, args.ignore_robots)
+        # Only the same start's crawl is carried on: another site's place
+        # would seed this one with its pages.
+        saved = saved_state(crawl.out) if args.resume else None
+        if saved and saved.get("start") == crawl.start:
+            crawl.load_state()
+            crawl.limit_reached = False
+            crawl.robots, _ = load_robots(crawl.start)
             sys.stderr.write("resuming: %d pages read, %d waiting\n" % (len(crawl.order), len(crawl.frontier)))
         else:
             if args.resume:
-                sys.stderr.write("nothing to resume in %s; starting fresh\n" % crawl.out)
+                sys.stderr.write("nothing to resume for %s in %s; starting fresh\n" % (crawl.start, crawl.out))
             crawl.seed()
         crawl.loop()
         return crawl.write()
@@ -880,16 +860,14 @@ def run(args):
 
 
 def run_add(args):
-    out = args.out
-    state = _load_json(os.path.join(out or "", paths.CACHE, "crawl.json")) if out else None
-    if not state:
-        sys.stderr.write("add needs --out: a folder a crawl wrote (it reads %s/crawl.json)\n" % paths.CACHE)
+    found = into_folder(args, "add")
+    if not found:
         return 2
-    args.start_url = state["start"]
+    profile, settings = found
 
     def body(crawl):
         crawl.load_state()
-        crawl.robots, _ = load_robots(crawl.start, args.ignore_robots)
+        crawl.robots, _ = load_robots(crawl.start)
         for i, raw in enumerate(args.urls):
             url = net.normalize_url(urljoin(crawl.start, raw))
             if not url or not net.same_site(url, crawl.root_host):
@@ -909,77 +887,64 @@ def run_add(args):
             crawl.forget(url)
             crawl.read(url)
         return crawl.write()
-    return _start_run(args, "add", body)
+    return _start_run(args, profile, body, settings)
 
 
-def _common_args(p, max_pages, images):
+IMAGES_HELP = ("which pictures to fetch: none; brand (the logo, the og:image and the 60 photographs the most pages "
+               "show); content (every picture in the pages' own content); all (content, and the header's and "
+               "footer's too)")
+
+
+def _read_args(p):
+    """How pages are read, for every command that reads them."""
+    p.add_argument("--browser", choices=("chrome", "obscura"), default="chrome",
+                   help="the browser that renders the pages and takes screenshots (default chrome, installed on "
+                        "first use where it can be; obscura when chrome cannot be had)")
+    p.add_argument("--static", action="store_true", help="no browser at all: plain fetches, no screenshots, no styles")
+
+
+def _crawl_args(p, max_pages, images):
+    p.add_argument("start_url")
     p.add_argument("--out", default=None, help="the site's folder (default raw/site/<host>, or raw/external/<host> with --external)")
-    p.add_argument("--structured-out", default=None, help="where the per-page JSON goes (default <out>/structured)")
+    p.add_argument("--external", action="store_true", help="someone else's site: raw/external/<host> by default")
     p.add_argument("--max-pages", type=int, default=max_pages,
                    help=f"pages to read (default {max_pages}; the summary says how many were found)")
-    p.add_argument("--images", choices=MODES, default=images,
-                   help="which pictures to fetch: none; brand (the logo, the og:image and the 60 photos most pages "
-                        "show); content (every picture in the pages' own content); all (default %s)" % images)
-    p.add_argument("--max-images", type=int, default=0, help="fetch at most N pictures (default 0: no cap)")
-    p.add_argument("--videos", action="store_true", help="also fetch the video files pages play (under 80 MB each)")
-    p.add_argument("--delay", type=float, default=0.5)
-    p.add_argument("--fetcher", choices=("local", "firecrawl"), default="local",
-                   help="local (this machine, the default) or firecrawl (the owner's Firecrawl credits, FIRECRAWL_API_KEY)")
-    p.add_argument("--static", "--no-render", action="store_true", dest="static", help="plain fetches only, never the browser")
+    p.add_argument("--images", choices=MODES, default=images, help=IMAGES_HELP + " (default %s)" % images)
+    p.add_argument("--delay", type=float, default=0.5, help="seconds between two pages (default 0.5)")
+    _read_args(p)
     p.add_argument("--screenshots", action="store_true", help="the whole page as PNG strips under shots/<name>/")
-    p.add_argument("--shots-engine", choices=("auto", "chrome", "obscura"), default="auto",
-                   help="who takes them: Chrome (installed on first use where it can be) paints as people's browsers "
-                        "do; Obscura is the fallback (default auto)")
     p.add_argument("--styles", action="store_true", help="read computed styles off the first pages into _index/styles.json (browser only)")
-    p.add_argument("--style-pages", type=int, default=STYLE_PAGES)
-    p.add_argument("--keep-boilerplate", action="store_true", help="keep the header, footer and repeated lines in every page")
-    p.add_argument("--ignore-robots", action="store_true")
+    p.add_argument("--style-pages", type=int, default=STYLE_PAGES, help="how many pages styles are read off (default %d)" % STYLE_PAGES)
+    p.add_argument("--resume", action="store_true", help="carry on from where an interrupted crawl of the same site stopped")
 
 
-def _crawl_args(p):
-    p.add_argument("start_url")
-    p.add_argument("--external", action="store_true", help="someone else's site: raw/external/<host> by default")
-    p.add_argument("--no-sitemap", action="store_true")
-    p.add_argument("--resume", action="store_true", help="carry on from where an interrupted crawl into the same folder stopped")
+def folder_args(p):
+    """`add` and `import`: into a folder a crawl wrote, keeping its settings."""
+    p.add_argument("--out", default=None, help="the folder a crawl wrote (default: the one raw/site/<host>)")
+    p.add_argument("--images", choices=MODES, default=None, help=IMAGES_HELP + " (default: what the folder's crawl chose)")
+    _read_args(p)
+    p.set_defaults(external=False, screenshots=False, styles=False, style_pages=0, delay=0.5,
+                   per_template=None, per_section=None)
 
 
 def add_parser(sub):
     p = sub.add_parser("site", help="read a site into raw/site/<host>: pages, pictures, inventory, templates, facts")
-    _crawl_args(p)
-    _common_args(p, DEFAULT_MAX_PAGES, "content")
-    p.add_argument("--per-template", type=int, default=None, help="read at most N pages of any one template (default: no cap)")
-    p.add_argument("--per-section", type=int, default=None, help="read at most N pages under any one top-level path (default: no cap)")
-    p.set_defaults(func=run, profile="site")
+    _crawl_args(p, DEFAULT_MAX_PAGES, "content")
+    p.set_defaults(func=run, profile="site", per_template=None, per_section=None)
 
     p = sub.add_parser("survey", help="sample a big site: every URL listed by template, two of each read, no pictures fetched")
-    _crawl_args(p)
-    _common_args(p, DEFAULT_MAX_PAGES, "none")
-    p.add_argument("--per-template", type=int, default=2, help="pages read per template (default 2)")
-    p.add_argument("--per-section", type=int, default=6, help="pages read per top-level path (default 6)")
-    p.set_defaults(func=run, profile="survey")
+    _crawl_args(p, DEFAULT_MAX_PAGES, "none")
+    p.set_defaults(func=run, profile="survey", per_template=2, per_section=6)
 
     p = sub.add_parser("brand", help="a business's own site for its facts, voice and look (tt-crawl playbook brand)")
-    _crawl_args(p)
-    _common_args(p, DEFAULT_MAX_PAGES, "brand")
-    p.add_argument("--per-template", type=int, default=2, help="pages read per template (default 2)")
-    p.add_argument("--per-section", type=int, default=6, help="pages read per top-level path (default 6)")
-    p.set_defaults(func=run, profile="brand", styles=True, screenshots=True)
+    _crawl_args(p, DEFAULT_MAX_PAGES, "brand")
+    p.set_defaults(func=run, profile="brand", per_template=2, per_section=6, styles=True, screenshots=True)
 
     p = sub.add_parser("pages", help="a whole site for a rebuild: every page and picture (tt-crawl playbook rebuild)")
-    _crawl_args(p)
-    _common_args(p, 1000, "content")
-    p.add_argument("--per-template", type=int, default=None, help=argparse.SUPPRESS)
-    p.add_argument("--per-section", type=int, default=None, help=argparse.SUPPRESS)
-    p.set_defaults(func=run, profile="pages")
-
-    p = sub.add_parser("reference", help="a site the owner admires: a few pages' look and structure (tt-crawl playbook reference)")
-    _crawl_args(p)
-    _common_args(p, 8, "none")
-    p.add_argument("--per-template", type=int, default=1, help=argparse.SUPPRESS)
-    p.add_argument("--per-section", type=int, default=3, help=argparse.SUPPRESS)
-    p.set_defaults(func=run, profile="reference", external=True, styles=True, screenshots=True)
+    _crawl_args(p, 1000, "content")
+    p.set_defaults(func=run, profile="pages", per_template=None, per_section=None)
 
     p = sub.add_parser("add", help="read more pages into a folder a crawl already wrote, and write it again")
     p.add_argument("urls", nargs="+", metavar="URL")
-    _common_args(p, 10_000, "content")
-    p.set_defaults(func=run_add, profile="add", no_sitemap=True, resume=False, external=False)
+    folder_args(p)
+    p.set_defaults(func=run_add)

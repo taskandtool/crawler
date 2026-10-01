@@ -1,16 +1,9 @@
 import os
-import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ttcrawl import browser, styles  # noqa: E402
-
-
-class _Proc:
-    def __init__(self, returncode=0, stdout=b""):
-        self.returncode = returncode
-        self.stdout = stdout
 
 
 class BrowserTests(unittest.TestCase):
@@ -24,32 +17,10 @@ class BrowserTests(unittest.TestCase):
                          "/usr/local/bin/obscura")
         self.assertIsNone(browser.find_obscura(env={}, which=lambda _: None, exists=lambda p: False))
 
-    def test_render_html(self):
-        seen = {}
-
-        def runner(cmd, **kw):
-            seen["cmd"] = cmd
-            return _Proc(0, b"<html><body><p>hello from js</p></body></html>")
-
-        out = browser.render_html("https://x.com/a", "/bin/obscura", runner=runner)
-        self.assertIn("hello from js", out)
-        self.assertEqual(seen["cmd"][:3], ["/bin/obscura", "fetch", "https://x.com/a"])
-        self.assertNotIn("--screenshot", seen["cmd"])
-        self.assertNotIn("--allow-private-network", seen["cmd"])
-        self.assertIsNone(browser.render_html("https://x.com", "/bin/o", runner=lambda c, **k: _Proc(1, b"")))
-        self.assertIsNone(browser.render_html("https://x.com", "/bin/o", runner=lambda c, **k: _Proc(0, b"  \n")))
-
-        def timeout(c, **k):
-            raise subprocess.TimeoutExpired(c, 1)
-
-        self.assertIsNone(browser.render_html("https://x.com", "/bin/o", runner=timeout))
-
-    def test_read_styles_and_parse_eval(self):
+    def test_parse_eval(self):
         self.assertEqual(browser.parse_eval('{"title":"t"}'), {"title": "t"})
         self.assertEqual(browser.parse_eval('"{\\"title\\":\\"t\\"}"'), {"title": "t"})
         self.assertIsNone(browser.parse_eval("nope"))
-        out = browser.read_styles("https://x.com", "/bin/o", runner=lambda c, **k: _Proc(0, b'{"fonts":["Inter"]}'))
-        self.assertEqual(out, {"fonts": ["Inter"]})
 
 
 class StyleTests(unittest.TestCase):

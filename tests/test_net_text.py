@@ -95,11 +95,7 @@ class TextTests(unittest.TestCase):
         self.assertNotIn(text.norm_line(shared), repeated_lines(pages))
         self.assertEqual(repeated_lines([blocks(bar)] * 2), set())   # too few pages to tell
 
-    def test_html_to_text(self):
-        t = text.html_to_text("<p>Hi</p><script>evil()</script><style>x{}</style><div>There &amp; back</div>")
-        self.assertIn("Hi", t)
-        self.assertIn("There & back", t)
-        self.assertNotIn("evil", t)
+    def test_word_count(self):
         self.assertEqual(text.word_count("one two  three"), 3)
 
 

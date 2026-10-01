@@ -1,9 +1,11 @@
 """Fetching, with the safety rails every subcommand shares.
 
-The AI drives these fetches from inside our infrastructure, so every host is
-checked against private, loopback, link-local, and reserved ranges before a
-request, and again on every redirect hop. A 429 (or a 503 with Retry-After)
-is waited out and retried, never hammered.
+Whoever asks for a URL may not be whoever runs the machine, so a host is
+checked against private, loopback, link-local and reserved ranges before a
+command requests it, and again on every redirect hop. The one exception is
+the site running on this machine (http://localhost or 127.0.0.1), which
+`check` and `audit` exist to test. A 429 (or a 503 with Retry-After) is
+waited out and retried, never hammered.
 """
 import gzip
 import ipaddress
@@ -17,7 +19,10 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request
 
-USER_AGENT = "TaskAndTool-Crawler/0.1 (+https://taskandtool.app)"
+from . import __version__
+
+USER_AGENT = "tt-crawl/%s (+https://github.com/taskandtool/crawler)" % __version__
+LOCAL_HOSTS = ("localhost", "127.0.0.1")
 TRACKING_PARAMS = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "ref")
 SKIP_EXTENSIONS = (".pdf", ".zip", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".mp4",
                    ".mp3", ".css", ".js", ".ico", ".xml", ".json", ".doc", ".docx", ".xls", ".xlsx",
@@ -53,6 +58,19 @@ def public_http_url(url):
     return is_public_host(host)
 
 
+def local_http_url(url):
+    """True for http://localhost[:port] or http://127.0.0.1[:port] (pure):
+    the site running on this machine."""
+    parts = urlsplit(url)
+    return parts.scheme == "http" and parts.hostname in LOCAL_HOSTS
+
+
+def local_or_public_http_url(url):
+    """What `check` and `audit` may test: a public http(s) URL, or the site
+    running on this machine."""
+    return local_http_url(url) or public_http_url(url)
+
+
 def same_site(url, root_host):
     """Same host as the crawl's root. A leading `www.` does not make a
     different site."""
@@ -84,11 +102,13 @@ def is_document(url):
 
 
 class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
-    """Re-run the SSRF check on every redirect hop, and remember the chain."""
+    """Re-run the SSRF check on every redirect hop, and remember the chain. A
+    local site may redirect within itself, never anywhere else local."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         host = urlsplit(newurl).hostname
-        if not host or not is_public_host(host):
+        within_local = local_http_url(newurl) and urlsplit(newurl).netloc == urlsplit(req.full_url).netloc
+        if not host or not (within_local or is_public_host(host)):
             raise urllib.error.URLError("redirect to non-public host blocked")
         chain = getattr(req, "_chain", [])
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
