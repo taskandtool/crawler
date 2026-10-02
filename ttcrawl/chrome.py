@@ -7,11 +7,11 @@ through cdp.RequestGuard. Obscura is small and fast and refuses private
 addresses itself, but paints some things differently (a circle's curve, a
 box sized only by its aspect ratio).
 
-`tt-crawl install-browser chrome` fetches Google's chrome-headless-shell from
+`tt-crawl setup` fetches Google's chrome-headless-shell from
 the Chrome for Testing channel into the user's own folders, adds the system
 libraries and basic fonts it needs through apt when they are missing, and
-links it into ~/.local/bin. `tt-crawl install-browser obscura` does the same
-for Obscura's release build. Nothing here needs a key or reaches a provider.
+links it into ~/.local/bin; it installs Obscura's release build the same
+way and puts a `tt-crawl` launcher on the PATH. Nothing here needs a key or reaches a provider.
 """
 import io
 import json
@@ -265,19 +265,46 @@ def driver(choice, install=True, log=None):
     return None, (note + "; " if note else "") + "obscura is not installed: no browser"
 
 
-def run_install(args):
-    try:
-        path = install_chrome() if args.engine == "chrome" else install_obscura(args.version or OBSCURA_DEFAULT)
-    except Exception as e:
-        print(json.dumps({"installed": False, "engine": args.engine, "error": str(e)}))
-        return 1
-    ver = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=60).stdout.strip()
-    print(json.dumps({"installed": True, "engine": args.engine, "path": path, "version": ver}))
-    return 0
+def install_launcher(which=shutil.which, log=print):
+    """A `tt-crawl` command on the PATH, whatever pip did with its console
+    script (a user install lands in ~/.local/bin, which a service shell may
+    not have). Returns its path."""
+    found = which("tt-crawl")
+    if found:
+        return found
+    dest, sudo = _bin_dir()
+    with tempfile.TemporaryDirectory() as tmp:
+        script = os.path.join(tmp, "tt-crawl")
+        with open(script, "w") as f:
+            f.write('#!/bin/sh\nexec python3 -m ttcrawl "$@"\n')
+        subprocess.run(sudo + ["install", "-m", "755", script, os.path.join(dest, "tt-crawl")], check=True)
+    log("tt-crawl launcher -> %s" % dest)
+    return os.path.join(dest, "tt-crawl")
+
+
+def setup(log=print, steps=None):
+    """Everything a machine needs after `pip install`: the launcher, Chrome
+    and Obscura. Each step that fails is reported and the rest still run.
+    Returns {name: path or None} and {name: error}."""
+    steps = steps or (("tt-crawl", install_launcher), ("chrome", install_chrome), ("obscura", install_obscura))
+    done, errors = {}, {}
+    for name, step in steps:
+        try:
+            done[name] = step(log=log)
+        except Exception as e:          # one missing browser leaves the other usable
+            done[name] = None
+            errors[name] = str(e).split("\n")[0][:300]
+    return done, errors
+
+
+def run_setup(args):
+    log = lambda m: sys.stderr.write(m + "\n")
+    done, errors = setup(log=log)
+    browsers = [b for b in ("chrome", "obscura") if done.get(b)]
+    print(json.dumps({"ok": bool(browsers) and bool(done.get("tt-crawl")), **done, "errors": errors}))
+    return 0 if browsers and done.get("tt-crawl") else 1
 
 
 def add_parser(sub):
-    p = sub.add_parser("install-browser", help="install Chrome or Obscura (the browsers --browser chooses) for this user")
-    p.add_argument("engine", choices=("chrome", "obscura"))
-    p.add_argument("--version", default=None, help="Obscura's release tag (default %s)" % OBSCURA_DEFAULT)
-    p.set_defaults(func=run_install)
+    p = sub.add_parser("setup", help="after pip install: tt-crawl on the PATH, then Chrome and Obscura (safe to re-run)")
+    p.set_defaults(func=run_setup)

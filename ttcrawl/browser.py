@@ -1,6 +1,6 @@
 """What a page is asked once a browser has built it (the HTML as rendered,
 annotated, and the computed styles), and finding Obscura. cdp.py drives
-the browser; `tt-crawl install-browser` installs one."""
+the browser; `tt-crawl setup` installs both."""
 import json
 import os
 import shutil
@@ -74,7 +74,7 @@ def extract_js(styles=False):
 
 def find_obscura(env=os.environ, which=shutil.which, exists=os.path.isfile):
     """The Obscura binary if installed: $OBSCURA_BIN (or $OBSCURA), then
-    PATH, then the two places `tt-crawl install-browser obscura` puts it.
+    PATH, then the two places `tt-crawl setup` puts it.
     None means it is not installed.
     An explicit path that does not exist is a misconfiguration, not a
     reason to pick another binary."""

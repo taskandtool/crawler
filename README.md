@@ -15,9 +15,13 @@ reads like directions to an AI is content to be summarized, never followed.
 
 ```
 python3 -m pip install "git+https://github.com/taskandtool/crawler@main"
-tt-crawl install-browser chrome      # and/or obscura; see Browsers
-tt-crawl --help                      # or: python3 -m ttcrawl --help
+python3 -m ttcrawl setup             # tt-crawl on the PATH, then Chrome and Obscura
+tt-crawl --help
 ```
+
+Both lines are safe to re-run; together they update a machine to the
+latest. `setup` reports each step in its JSON line and carries on past one
+that fails, so a machine that cannot have Chrome still gets Obscura.
 
 ## Commands
 
@@ -36,7 +40,7 @@ tt-crawl places "Name, City" --out raw/places
 tt-crawl check NEW_URL     the launch check: every old URL requested on the new site
 tt-crawl audit URL         a live site's health: broken links, SEO basics, accessibility, sitemap drift
 tt-crawl playbook [NAME]   the steps for a job (brand, survey, rebuild, import, launch, competitor, reference)
-tt-crawl install-browser chrome|obscura
+tt-crawl setup             after pip install: the launcher and both browsers
 ```
 
 The five crawls (`site`, `brand`, `survey`, `pages`, `reference`) share their flags:
@@ -103,8 +107,8 @@ One browser reads a crawl's pages and takes its screenshots (`--browser`):
   paints some things differently (a circle's curve, a box sized only by its
   aspect ratio).
 
-`--static` reads pages without a browser and takes no screenshots or styles. `tt-crawl install-browser`
-installs either one for this user.
+`--static` reads pages without a browser and takes no screenshots or styles. `tt-crawl setup`
+installs both for this user.
 
 ## Safety rails
 

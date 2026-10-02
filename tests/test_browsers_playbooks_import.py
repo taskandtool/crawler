@@ -150,6 +150,22 @@ class Harness(unittest.TestCase):
         return (json.loads(out.getvalue().strip().splitlines()[-1]) if code == 0 else None), err.getvalue()
 
 
+class SetupTests(unittest.TestCase):
+    def test_a_failed_step_is_reported_and_the_rest_still_run(self):
+        def broken(log):
+            raise RuntimeError("no build for this machine\nmore detail")
+        done, errors = chrome.setup(log=lambda m: None, steps=(
+            ("tt-crawl", lambda log: "/usr/local/bin/tt-crawl"), ("chrome", broken),
+            ("obscura", lambda log: "/usr/local/bin/obscura")))
+        self.assertEqual(done, {"tt-crawl": "/usr/local/bin/tt-crawl", "chrome": None,
+                                "obscura": "/usr/local/bin/obscura"})
+        self.assertEqual(errors, {"chrome": "no build for this machine"})
+
+    def test_the_launcher_is_left_alone_when_tt_crawl_is_on_the_path(self):
+        self.assertEqual(chrome.install_launcher(which=lambda n: "/home/u/.local/bin/tt-crawl"),
+                         "/home/u/.local/bin/tt-crawl")
+
+
 class ReferenceProfileTests(unittest.TestCase):
     def test_reference_reads_a_few_pages_of_someone_elses_site_for_its_look(self):
         a = cli.build_parser().parse_args(["reference", "https://site-they-like.com"])
