@@ -50,6 +50,9 @@ DEFAULT_MAX_PAGES = 100
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_SITEMAPS = 50
 STYLE_PAGES = 5
+# A brand read learns the look from the first pages (the start and what its
+# header links to); shooting every page cost most of the crawl's time.
+BRAND_SHOT_PAGES = 5
 MAX_DELAY_S = 8
 STATE_EVERY = 10             # pages between two saves of the crawl's place
 CACHE_VERSION = 2
@@ -391,7 +394,9 @@ class Crawl:
             "parsed": {k: parsed.get(k) for k in PARSED_KEEP}, "digest": digest, "minhash": sig}, indent=None)
         if name not in self.order:
             self.order.append(name)
-        if self.driver and self.args.screenshots:  # only the pages kept: a duplicate costs no capture
+        shot_cap = getattr(self.args, "screenshot_pages", None)
+        shots = sum(1 for r in self.records.values() if r.get("screenshot"))
+        if self.driver and self.args.screenshots and (not shot_cap or shots < shot_cap):  # only the pages kept: a duplicate costs no capture
             shot = self.driver.shoot(url, os.path.join(self.out, paths.SHOTS, name))
             if shot.get("strips"):
                 rec["screenshot"] = paths.SHOTS + "/" + name
@@ -913,6 +918,7 @@ def _crawl_args(p, max_pages, images):
     p.add_argument("--delay", type=float, default=0.5, help="seconds between two pages (default 0.5)")
     _read_args(p)
     p.add_argument("--screenshots", action="store_true", help="the whole page as PNG strips under shots/<name>/")
+    p.add_argument("--screenshot-pages", type=int, default=None, help="how many pages are screenshot, the first read (default all; brand 5)")
     p.add_argument("--styles", action="store_true", help="read computed styles off the first pages into _index/styles.json (browser only)")
     p.add_argument("--style-pages", type=int, default=STYLE_PAGES, help="how many pages styles are read off (default %d)" % STYLE_PAGES)
     p.add_argument("--resume", action="store_true", help="carry on from where an interrupted crawl of the same site stopped")
@@ -923,7 +929,7 @@ def folder_args(p):
     p.add_argument("--out", default=None, help="the folder a crawl wrote (default: the one raw/site/<host>)")
     p.add_argument("--images", choices=MODES, default=None, help=IMAGES_HELP + " (default: what the folder's crawl chose)")
     _read_args(p)
-    p.set_defaults(external=False, screenshots=False, styles=False, style_pages=0, delay=0.5,
+    p.set_defaults(external=False, screenshots=False, screenshot_pages=None, styles=False, style_pages=0, delay=0.5,
                    per_template=None, per_section=None)
 
 
@@ -938,7 +944,8 @@ def add_parser(sub):
 
     p = sub.add_parser("brand", help="a business's own site for its facts, voice and look (tt-crawl playbook brand)")
     _crawl_args(p, DEFAULT_MAX_PAGES, "brand")
-    p.set_defaults(func=run, profile="brand", per_template=2, per_section=6, styles=True, screenshots=True)
+    p.set_defaults(func=run, profile="brand", per_template=2, per_section=6, styles=True, screenshots=True,
+                   screenshot_pages=BRAND_SHOT_PAGES)
 
     p = sub.add_parser("pages", help="a whole site for a rebuild: every page and picture (tt-crawl playbook rebuild)")
     _crawl_args(p, 1000, "content")

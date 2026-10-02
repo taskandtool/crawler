@@ -107,7 +107,10 @@ class PlaybookTests(unittest.TestCase):
         p = cli.build_parser()
         brand = p.parse_args(["brand", "https://a.com/"])
         self.assertEqual((brand.images, brand.styles, brand.screenshots, brand.per_template, brand.profile), ("brand", True, True, 2, "brand"))
+        self.assertEqual(brand.screenshot_pages, 5)                              # the look, from the first pages
+        self.assertEqual(p.parse_args(["brand", "https://a.com/", "--screenshot-pages", "0"]).screenshot_pages, 0)
         pages = p.parse_args(["pages", "https://a.com/"])
+        self.assertIsNone(pages.screenshot_pages)
         self.assertEqual((pages.images, pages.max_pages, pages.per_template), ("content", 1000, None))
         self.assertEqual((pages.browser, pages.static), ("chrome", False))       # chrome reads pages by default
 
