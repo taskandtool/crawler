@@ -90,7 +90,7 @@ class GuardTests(unittest.TestCase):
 
 class PlaybookTests(unittest.TestCase):
     def test_list_and_print(self):
-        self.assertEqual(playbooks.names(), ["brand", "competitor", "import", "launch", "rebuild", "survey"])
+        self.assertEqual(playbooks.names(), ["brand", "competitor", "import", "launch", "rebuild", "reference", "survey"])
         for n in playbooks.names():
             text = playbooks.read(n)
             self.assertTrue(text.startswith("# %s:" % n), n)
@@ -148,6 +148,13 @@ class Harness(unittest.TestCase):
             code = args.func(args)
         self.assertEqual(code, expect, err.getvalue())
         return (json.loads(out.getvalue().strip().splitlines()[-1]) if code == 0 else None), err.getvalue()
+
+
+class ReferenceProfileTests(unittest.TestCase):
+    def test_reference_reads_a_few_pages_of_someone_elses_site_for_its_look(self):
+        a = cli.build_parser().parse_args(["reference", "https://site-they-like.com"])
+        self.assertEqual((a.profile, a.external, a.max_pages, a.images, a.styles, a.screenshots, a.per_template),
+                         ("reference", True, 8, "none", True, True, 1))
 
 
 class ImportTests(Harness):

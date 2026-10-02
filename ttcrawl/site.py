@@ -1,6 +1,6 @@
-"""`tt-crawl site`, `survey`, `brand`, `pages` and `add`: read a site into
-its folder (paths.py has the layout). The four crawls are one crawl with
-different defaults.
+"""`tt-crawl site`, `survey`, `brand`, `pages`, `reference` and `add`: read a
+site into its folder (paths.py has the layout). The five crawls are one crawl
+with different defaults.
 
 A crawl reads pages, then writes everything from what it read:
 
@@ -943,6 +943,11 @@ def add_parser(sub):
     p = sub.add_parser("pages", help="a whole site for a rebuild: every page and picture (tt-crawl playbook rebuild)")
     _crawl_args(p, 1000, "content")
     p.set_defaults(func=run, profile="pages", per_template=None, per_section=None)
+
+    p = sub.add_parser("reference", help="a site the owner admires: a few pages' look and structure (tt-crawl playbook reference)")
+    _crawl_args(p, 8, "none")
+    p.set_defaults(func=run, profile="reference", per_template=1, per_section=3,
+                   external=True, styles=True, screenshots=True)
 
     p = sub.add_parser("add", help="read more pages into a folder a crawl already wrote, and write it again")
     p.add_argument("urls", nargs="+", metavar="URL")

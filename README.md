@@ -26,6 +26,7 @@ tt-crawl site URL          read a site: every page up to --max-pages (100), pict
 tt-crawl brand URL         a business's own site: brand pictures, styles, screenshots, collections sampled
 tt-crawl survey URL        a big site sampled: every URL listed by template, two of each read, no pictures
 tt-crawl pages URL         a whole site for a rebuild: up to 1000 pages and every picture in their content
+tt-crawl reference URL     a site the owner admires: eight pages' screenshots, styles and structure, no pictures
 tt-crawl add URL ...       read more pages into a folder a crawl wrote, keeping its settings
 tt-crawl import            with no --template: every post and page of a WordPress site; with
                            --template T: that one collection, from the site's own feed or HTML
@@ -34,11 +35,11 @@ tt-crawl places "Name, City" --out raw/places
                            the business's public Google listing (GOOGLE_PLACES_API_KEY)
 tt-crawl check NEW_URL     the launch check: every old URL requested on the new site
 tt-crawl audit URL         a live site's health: broken links, SEO basics, accessibility, sitemap drift
-tt-crawl playbook [NAME]   the steps for a job (brand, survey, rebuild, import, launch, competitor)
+tt-crawl playbook [NAME]   the steps for a job (brand, survey, rebuild, import, launch, competitor, reference)
 tt-crawl install-browser chrome|obscura
 ```
 
-The four crawls (`site`, `brand`, `survey`, `pages`) share their flags:
+The five crawls (`site`, `brand`, `survey`, `pages`, `reference`) share their flags:
 `--out DIR`, `--external` (someone else's site, into `raw/external/<host>`),
 `--max-pages N`, `--images none|brand|content|all`, `--delay S`,
 `--browser chrome|obscura`, `--static` (no browser at all, so no screenshots

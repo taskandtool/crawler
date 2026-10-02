@@ -36,6 +36,6 @@ def run(args):
 
 
 def add_parser(sub):
-    p = sub.add_parser("playbook", help="the steps for a job (brand, survey, rebuild, import, launch, competitor)")
+    p = sub.add_parser("playbook", help="the steps for a job (brand, survey, rebuild, import, launch, competitor, reference)")
     p.add_argument("name", nargs="?")
     p.set_defaults(func=run)
