@@ -58,6 +58,14 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(self.p["microdata"][0]["props"], {"name": "Jane Doe", "jobTitle": "Owner"})
         self.assertIn("RoofingContractor", self.p["jsonld_raw"][0])
 
+    def test_a_gallery_link_to_a_photograph_is_the_pages_picture(self):
+        # a lightbox gallery: the full-size file is the link, the thumbnail is drawn by script
+        p = parse_page("<html><body><main><a class='e-gallery-item' href='/uploads/2025/07/2.jpg?v=1'>"
+                       "<div class='thumb'></div></a><a href='/about'>About</a></main></body></html>", URL)
+        srcs = [i["src"] for i in p["images"]]
+        self.assertIn("https://acme.com/uploads/2025/07/2.jpg?v=1", srcs)
+        self.assertEqual(len(srcs), 1)
+
     def test_bad_html_never_raises(self):
         p = parse_page("<html><body><a href='/x'>unclosed <b>tags", URL)
         self.assertEqual(p["links"][0]["href"], "https://acme.com/x")

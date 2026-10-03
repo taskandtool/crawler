@@ -38,6 +38,7 @@ BLOCK_TAGS = HEADING_TAGS | {"p", "li", "blockquote", "td", "th", "dt", "dd", "f
 BREAK_TAGS = {"div", "section", "article", "main", "header", "footer", "nav", "aside", "form", "table", "tr",
               "ul", "ol", "dl", "figure", "br", "hr", "body", "button", "label", "select", "option", "iframe"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "template", "svg", "head", "title", "button", "select", "option"}
+IMAGE_LINK_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif)$", re.I)
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 ICON_SRC_RE = re.compile(r"\.svg(\?|$)|icon|sprite|logo|favicon|spinner|loader|pixel|spacer|blank\.gif", re.I)
 MIN_BLOCK_IMAGE_PX = 400
@@ -288,6 +289,17 @@ class PageParser(HTMLParser):
         elif tag == "a":
             self._link_text = []
             self._link_attrs = a
+            # A lightbox gallery (Elementor, WordPress, most plugins) links each
+            # full-size photograph and draws its thumbnail with script: the
+            # link is the page's picture, though no <img> carries it.
+            href = a.get("href") or ""
+            if IMAGE_LINK_RE.search(href.split("?")[0]):
+                self.images.append({
+                    "src": self._abs(href), "srcset": [], "srcset_w": [],
+                    "alt": htmlmod.unescape(a.get("aria-label") or a.get("title") or a.get("data-elementor-lightbox-title") or "").strip(),
+                    "width": None, "height": None, "landmark": self.landmark, "in_link": True,
+                    "link_href": self._abs(href), "classes": sorted(self._classes(a)),
+                })
         elif tag in ("ul", "ol") and self.landmark:
             self.list_depth += 1
         elif tag == "img":
