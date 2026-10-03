@@ -206,9 +206,12 @@ class RequestGuard:
     address is refused, so the SSRF rail holds for the page, each redirect
     and every subresource. Obscura refuses those itself."""
 
-    def __init__(self, is_public=None):
+    def __init__(self, is_public=None, allow_hosts=()):
         from . import net
         self.is_public = is_public or net.is_public_host
+        # hosts let through although private: `tt-crawl shoot` on this
+        # machine's own dev server (localhost), and nothing else
+        self.allow_hosts = {h.lower() for h in allow_hosts}
         self.seen, self.refused = {}, []
 
     def allowed(self, url):
@@ -219,6 +222,8 @@ class RequestGuard:
         if parts.scheme not in ("http", "https") or not parts.hostname:
             return False
         host = parts.hostname.lower()
+        if host in self.allow_hosts:
+            return True
         if host not in self.seen:
             self.seen[host] = host != "localhost" and not host.endswith((".local", ".internal")) and self.is_public(host)
         return self.seen[host]
@@ -369,17 +374,18 @@ SETTLE_JS = "document.body ? document.body.innerText.length : 0"
 HEIGHT_JS = "Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)"
 
 
-def open_page(browser, url, width=VIEWPORT[0], timeout=45):
-    """A session on `url`, loaded at desktop width; Chrome's requests go
-    through a RequestGuard. Raises CDPError when the page does not load."""
-    guard = RequestGuard() if browser.needs_guard else None
+def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], mobile=False, allow_hosts=()):
+    """A session on `url`, loaded at `width` (desktop by default); Chrome's
+    requests go through a RequestGuard. Raises CDPError when the page does
+    not load."""
+    guard = RequestGuard(allow_hosts=allow_hosts) if browser.needs_guard else None
     s = Session(browser.ws_url, timeout=timeout, on_event=guard)
     try:
         if guard:
             guard.enable(s)
         s.call("Page.enable")
         s.call("Emulation.setDeviceMetricsOverride",
-               {"width": width, "height": VIEWPORT[1], "deviceScaleFactor": 1, "mobile": False})
+               {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": mobile})
         nav = s.call("Page.navigate", {"url": url}, timeout=timeout)
         if nav.get("errorText"):
             raise PageError("%s: %s" % (url, nav["errorText"]))
@@ -417,10 +423,13 @@ def render(browser, url, styles=False, timeout=45):
 
 
 def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIGHT,
-                      max_strips=MAX_STRIPS, timeout=45):
+                      max_strips=MAX_STRIPS, timeout=45, height=VIEWPORT[1], mobile=False,
+                      first_screen=False, allow_hosts=()):
     """The whole page as PNG strips `01.png`, `02.png`… under `out_dir`, plus
-    `meta.json`. Returns the meta dict, or raises CDPError."""
-    s = open_page(browser, url, width=width, timeout=timeout)
+    `meta.json` (only the first `height` pixels with `first_screen`). Returns
+    the meta dict, or raises CDPError."""
+    s = open_page(browser, url, width=width, timeout=timeout, height=height, mobile=mobile,
+                  allow_hosts=allow_hosts)
     try:
         # Lazy images decode as they come into view: walk down the page once,
         # then wait until the text stops growing.
@@ -428,8 +437,8 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIG
                    "await new Promise(r => setTimeout(r, 60)); } scrollTo(0, 0); })()" % HEIGHT_JS,
                    await_promise=True, timeout=timeout)
         settle(s)
-        height = s.evaluate(HEIGHT_JS) or VIEWPORT[1]
-        plan, truncated = strip_plan(height, strip, max_strips)
+        page_height = s.evaluate(HEIGHT_JS) or height
+        plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
         for old in os.listdir(out_dir):     # an earlier run's strips and meta
             if old.endswith(".png") or old == "meta.json":
@@ -443,7 +452,7 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIG
             with open(os.path.join(out_dir, name), "wb") as f:
                 f.write(base64.b64decode(shot["data"]))
             files.append(name)
-        meta = {"url": url, "width": width, "height": int(height), "strip_height": strip,
+        meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
                 "strips": files, "truncated": truncated, "engine": browser.engine}
         with open(os.path.join(out_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)

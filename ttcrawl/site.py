@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
@@ -55,6 +56,11 @@ STYLE_PAGES = 5
 BRAND_SHOT_PAGES = 5
 MAX_DELAY_S = 8
 STATE_EVERY = 10             # pages between two saves of the crawl's place
+# Pages read at once, each in its own browser: most of a crawl is the browser
+# rendering, and three in flight cut a 24-page read by more than half without
+# a burst a small host would notice. A throttled answer drops to one.
+PARALLEL = 3
+IMAGE_PARALLEL = 6          # pictures downloaded at once (plain requests, no browser)
 CACHE_VERSION = 2
 # A line on this share of the pages read (and on at least three) is the
 # site's furniture wherever the theme put it: a top bar, a skip link, a
@@ -170,6 +176,7 @@ class Crawl:
         self.seen = set()
         self.kept_hashes, self.near = set(), NearDuplicates()
         self.style_readings = []
+        self.extra_drivers = []            # the browsers of pages read in parallel (workers)
         self.limit_reached = False
         self.started = _now()
         # One name per URL for its page file, its structured JSON and its
@@ -239,12 +246,11 @@ class Crawl:
         self.templates.mark_nav(nav)
 
     # ── reading ──
-    def loop(self):
-        requested = 0
-        while len(self.frontier):
-            if len(self.order) >= self.args.max_pages:
-                self.limit_reached = True
-                break
+    def next_batch(self, size):
+        """Up to `size` pages to read next, each admitted (robots, sampling)
+        in frontier order; the ones turned away are recorded as skipped."""
+        batch = []
+        while len(self.frontier) and len(batch) < size:
             url = self.frontier.pop()
             if url in self.seen:
                 continue
@@ -257,15 +263,60 @@ class Crawl:
             if url != self.start and not self.sampler.admit(url, template, nav=url in self.templates.nav):
                 self.skip(url, "sampled_out")
                 continue
-            # Between every two requests, kept or not, at the pace the site allows.
+            batch.append((url, template))
+        return batch
+
+    def workers(self, n):
+        """A browser per page in flight: the crawl's own first, more started
+        as needed; a browser that will not start leaves fewer in flight."""
+        if self.driver is None:
+            return [None] * n
+        while len(self.extra_drivers) < n - 1:
+            d, _note = chrome.driver(self.args.browser, install=False)
+            if d is None:
+                break
+            self.extra_drivers.append(d)
+        return [self.driver] + self.extra_drivers[: n - 1]
+
+    def loop(self):
+        requested = 0
+        width = max(1, getattr(self.args, "parallel", PARALLEL) or 1)
+        while len(self.frontier):
+            budget = self.args.max_pages - len(self.order)
+            if budget <= 0:
+                self.limit_reached = True
+                break
+            # The start page alone, so the header's links are known before the
+            # rest; then up to `width` at once, never past the page limit.
+            size = 1 if not self.order else min(width, budget)
+            batch = self.next_batch(size)
+            if not batch:
+                continue
+            # Between every two rounds of requests, at the pace the site allows.
             if requested:
                 time.sleep(self.pace["delay"])
-            requested += 1
-            self.read(url, from_start=(url == self.start))
-            if self.record(url)["reason"] == "redirect":
-                self.sampler.refund(url, template)
-            if requested % STATE_EVERY == 0:
-                self.save_state()
+            styles_left = self.args.styles and self.args.style_pages - len(self.style_readings)
+            jobs = [(url, i < (styles_left or 0)) for i, (url, _t) in enumerate(batch)]
+            drivers = self.workers(len(jobs))
+            if len(drivers) < len(jobs):
+                for url, _t in batch[len(drivers):]:      # no browser for these: back to the frontier
+                    self.seen.discard(url)
+                    self.frontier.add(url, Frontier.FOUND)
+                jobs, batch = jobs[: len(drivers)], batch[: len(drivers)]
+            if len(jobs) == 1:
+                fetched = [self.fetch(jobs[0][0], drivers[0], jobs[0][1])]
+            else:
+                with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+                    fetched = list(pool.map(lambda j, d: self.fetch(j[0], d, j[1]), jobs, drivers))
+            for (url, template), got in zip(batch, fetched):
+                requested += 1
+                self.read(url, from_start=(url == self.start), fetched=got)
+                if self.record(url)["reason"] == "redirect":
+                    self.sampler.refund(url, template)
+                if requested % STATE_EVERY == 0:
+                    self.save_state()
+            if self.pace["throttled"]:      # the site pushed back: one page at a time from here
+                width = 1
         for url in self.frontier:
             rec = self.record(url)
             rec["template"] = rec["template"] or self.templates.of(url)
@@ -273,31 +324,46 @@ class Crawl:
                 rec["reason"] = "unread"
         self.save_state()
 
-    def read(self, url, from_start=False):
-        """Read one page: kept (saved to the cache), or skipped with its reason."""
-        got = self.get(url)
+    def read(self, url, from_start=False, fetched=None):
+        """Read one page: kept (saved to the cache), or skipped with its reason.
+        `fetched` is what `fetch` already brought back, when it ran in parallel."""
+        got = self.get(url, fetched)
         if got is None:
             return
         html, rendered, styles, fetcher = got
         self.absorb(url, html, rendered=rendered, styles=styles, fetcher=fetcher, from_start=from_start)
 
-    def get(self, url):
-        """The page's HTML, or None (skipped, with the reason recorded). The
-        plain request first, for the status, the final URL and the headers
-        (and the page itself when there is no browser): a redirect, an error
-        or a throttled answer then costs no render. Then one render in the
-        browser."""
-        rec = self.record(url)
+    def fetch(self, url, driver, want_styles):
+        """The network half of reading a page, safe to run several at once:
+        the plain request first, for the status, the final URL and the headers
+        (and the page itself when there is no browser), so a redirect, an
+        error or a throttled answer costs no render; then one render in
+        `driver`. (resp or None, render or None, engine or None)."""
         try:
-            resp = net.fetch(url, method="GET" if self.driver is None else "HEAD")
+            resp = net.fetch(url, method="GET" if driver is None else "HEAD")
         except Exception:
             resp = None
-        if self.driver and (resp is None or resp["status"] == 405):
+        if driver and (resp is None or resp["status"] == 405):
             # some servers refuse or drop a HEAD; ask once more the plain way
             try:
                 resp = net.fetch(url)
             except Exception:
                 resp = None
+        if resp is None or not driver:
+            return resp, None, None
+        final = net.normalize_url(resp["final_url"]) if resp["final_url"] else None
+        if (final and final != url) or (resp["status"] and resp["status"] >= 400):
+            return resp, None, None
+        return resp, driver.render(url, styles=want_styles), driver.engine
+
+    def get(self, url, fetched=None):
+        """The page's HTML, or None (skipped, with the reason recorded), from
+        what `fetch` brought back (fetched now when it has not run)."""
+        rec = self.record(url)
+        if fetched is None:
+            want_styles = self.args.styles and len(self.style_readings) < self.args.style_pages
+            fetched = self.fetch(url, self.driver, want_styles)
+        resp, got, engine = fetched
         if resp is None:
             return self.skip(url, "fetch_failed")
         rec["status"], rec["final_url"] = resp["status"], resp["final_url"]
@@ -317,14 +383,11 @@ class Crawl:
         if resp["status"] and resp["status"] >= 400:
             return self.skip(url, "http_%d" % resp["status"])
 
-        # One render: the page's HTML as the browser built it, annotated with
+        # The render: the page's HTML as the browser built it, annotated with
         # what only the browser knows, and the computed styles when asked.
         html, rendered, styles = None, False, None
-        want_styles = self.args.styles and len(self.style_readings) < self.args.style_pages
-        if self.driver:
-            got = self.driver.render(url, styles=want_styles)
-            if got:
-                html, rendered, styles = got["html"], True, got.get("styles")
+        if got:
+            html, rendered, styles = got["html"], True, got.get("styles")
         if html is None:
             if not resp["body"]:
                 try:
@@ -334,7 +397,7 @@ class Crawl:
             html = resp["body"].decode("utf-8", "replace")
         if not html or not html.strip():
             return self.skip(url, "fetch_failed")
-        return html, rendered, styles, self.driver.engine if rendered else "static"
+        return html, rendered, styles, engine if rendered else "static"
 
     def absorb(self, url, html, rendered=False, styles=None, fetcher="static", from_start=False, front=None):
         """Keep a page read by any route (a render, a static fetch, or an
@@ -650,11 +713,16 @@ class Crawl:
                 with open(path, "rb") as f:
                     by_bytes.setdefault(hashlib.sha256(f.read()).hexdigest(), k["file"])
         fetched = 0
+        todo = []
         for it in media.select(self.args.images):
             known = media.known.get(it["key"])
             if known and os.path.isfile(os.path.join(img_dir, known["file"])):
                 it.update(known)
-                continue
+            else:
+                todo.append(it)
+
+        def download(it):
+            """The first candidate that answers with bytes: (url, data, type) or None."""
             for url in media.candidates(it):
                 host = urlsplit(url).hostname
                 if not host or not net.is_public_host(host):
@@ -663,8 +731,17 @@ class Crawl:
                     data, ctype = net.fetch_bytes(url, MAX_IMAGE_BYTES)
                 except Exception:
                     continue
-                if not data:
-                    continue
+                if data:
+                    return url, data, ctype
+            return None
+
+        # Downloads run several at once; naming, de-duplication and writing
+        # stay in order, so the same crawl names its files the same way.
+        with ThreadPoolExecutor(max_workers=IMAGE_PARALLEL) as pool:
+            downloads = list(pool.map(download, todo))
+        for it, got in zip(todo, downloads):
+            if got:
+                url, data, ctype = got
                 digest = hashlib.sha256(data).hexdigest()
                 fname = by_bytes.get(digest)
                 if not fname:
@@ -676,7 +753,6 @@ class Crawl:
                 size = dimensions(data)
                 it.update({"file": fname, "fetched_from": url, "bytes": len(data),
                            "width": size[0] if size else it["width"], "height": size[1] if size else it["height"]})
-                break
         # A picture an earlier run fetched stays linked whether or not this
         # run chose it (a content crawl, then a brand one, keeps every file).
         for it in media.items.values():
@@ -841,8 +917,9 @@ def _start_run(args, profile, body, settings=None):
         return body(crawl)
     finally:
         net.on_throttle = None
-        if crawl.driver:
-            crawl.driver.stop()
+        for d in [crawl.driver] + crawl.extra_drivers:
+            if d:
+                d.stop()
 
 
 def run(args):
@@ -915,7 +992,9 @@ def _crawl_args(p, max_pages, images):
     p.add_argument("--max-pages", type=int, default=max_pages,
                    help=f"pages to read (default {max_pages}; the summary says how many were found)")
     p.add_argument("--images", choices=MODES, default=images, help=IMAGES_HELP + " (default %s)" % images)
-    p.add_argument("--delay", type=float, default=0.5, help="seconds between two pages (default 0.5)")
+    p.add_argument("--delay", type=float, default=0.5, help="seconds between two rounds of pages (default 0.5)")
+    p.add_argument("--parallel", type=int, default=PARALLEL,
+                   help="pages read at once, each in its own browser (default %d; 1 after the site throttles)" % PARALLEL)
     _read_args(p)
     p.add_argument("--screenshots", action="store_true", help="the whole page as PNG strips under shots/<name>/")
     p.add_argument("--screenshot-pages", type=int, default=None, help="how many pages are screenshot, the first read (default all; brand 5)")
