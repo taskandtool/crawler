@@ -7,6 +7,8 @@ import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from urllib.parse import urlsplit
 
 from . import cdp, chrome
@@ -23,8 +25,26 @@ def name_for(url):
     return re.sub(r"[^a-z0-9]+", "-", path.lower()).strip("-") or "home"
 
 
-def shoot(url, widths, out, name=None, first_screen=False, driver=None):
-    """[(width, meta)] for each width; meta carries `dir` and `strips`, or `error`."""
+def page_status(url, timeout=15):
+    """The page's HTTP status, or None when nothing answers."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
+
+
+def shoot(url, widths, out, name=None, first_screen=False, driver=None, status=page_status):
+    """[(width, meta)] for each width; meta carries `dir` and `strips`, or `error`.
+    A page that answers 400 or above is not shot: a screenshot of an error
+    page would look like success."""
+    code = status(url)
+    if code is None:
+        return [(w, {"error": "nothing answered at %s" % url}) for w in widths]
+    if code >= 400:
+        return [(w, {"error": "%s answered %d" % (url, code)}) for w in widths]
     name = name or name_for(url)
     host = (urlsplit(url).hostname or "").lower()
     allow = (host,) if host in LOCAL_HOSTS else ()
@@ -62,9 +82,9 @@ def report(url, results, first_screen):
             width, meta["dir"], strips[0] if len(strips) == 1 else "01.png … %s" % strips[-1],
             meta["height"], len(strips), "" if len(strips) == 1 else "s, read in order", cut))
     if any(m.get("error") for _, m in results):
-        lines.append("Is the page served? curl -s -o /dev/null -w '%{http_code}' " + url)
+        lines.append("Is the page served at that path? curl -s -o /dev/null -w '%{http_code}' " + url)
     else:
-        lines.append("Next: look at each image; send them to the chat with create_deliverables.")
+        lines.append("Next: look at each image, in order.")
     return "\n".join(lines)
 
 
@@ -74,11 +94,12 @@ def run(args):
         return 2
     widths = args.width or [1280, PHONE_WIDTH]
     results = shoot(args.url, widths, args.out, name=args.name, first_screen=args.first_screen)
+    failed = any(m.get("error") for _, m in results)
     if args.json:
         print(json.dumps([dict(m, width=w) for w, m in results], indent=2))
     else:
-        print(report(args.url, results, args.first_screen))
-    return 1 if any(m.get("error") for _, m in results) else 0
+        print(report(args.url, results, args.first_screen), file=sys.stderr if failed else sys.stdout)
+    return 1 if failed else 0
 
 
 def add_parser(sub):

@@ -924,10 +924,11 @@ def _start_run(args, profile, body, settings=None):
 
 def run(args):
     def body(crawl):
-        # Only the same start's crawl is carried on: another site's place
-        # would seed this one with its pages.
+        # Only the same site's crawl is carried on (www. or not, any start
+        # path): another site's place would seed this one with its pages.
         saved = saved_state(crawl.out) if args.resume else None
-        if saved and saved.get("start") == crawl.start:
+        same_site = lambda a, b: (urlsplit(a or "").hostname or "").removeprefix("www.") == (urlsplit(b or "").hostname or "").removeprefix("www.")
+        if saved and same_site(saved.get("start"), crawl.start):
             crawl.load_state()
             crawl.limit_reached = False
             crawl.robots, _ = load_robots(crawl.start)

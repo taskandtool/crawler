@@ -31,23 +31,31 @@ class ShootTest(unittest.TestCase):
 
     def test_each_width_lands_in_its_own_folder_and_the_browser_stops(self):
         d = FakeDriver()
-        results = shoot.shoot("http://localhost:3000/", [1280, 390], "uploads", driver=d)
+        results = shoot.shoot("http://localhost:3000/", [1280, 390], "uploads", driver=d, status=lambda u: 200)
         self.assertEqual([w for w, _ in results], [1280, 390])
         self.assertEqual([m["dir"] for _, m in results], ["uploads/home-1280", "uploads/home-390"])
         self.assertTrue(d.stopped)
 
     def test_the_summary_says_where_to_look_and_what_next(self):
-        results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver())
+        results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(), status=lambda u: 200)
         text = shoot.report("http://localhost:3000/", results, False)
         self.assertIn("uploads/home-1280/01.png … 02.png", text)
         self.assertIn("read in order", text)
-        self.assertIn("Next:", text)
+        self.assertIn("Next: look at each image", text)
 
     def test_a_failure_says_how_to_check_the_page_is_served(self):
-        results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(fail=True))
+        results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(fail=True), status=lambda u: 200)
         text = shoot.report("http://localhost:3000/", results, False)
         self.assertIn("failed", text)
         self.assertIn("curl", text)
+
+    def test_an_error_page_is_not_shot(self):
+        d = FakeDriver()
+        results = shoot.shoot("http://localhost:3000/nope", [1280], "uploads", driver=d, status=lambda u: 404)
+        self.assertEqual(results[0][1]["error"], "http://localhost:3000/nope answered 404")
+        self.assertEqual(d.calls, [])
+        results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=d, status=lambda u: None)
+        self.assertIn("nothing answered", results[0][1]["error"])
 
     def test_only_the_named_local_host_gets_through_the_guard(self):
         guard = cdp.RequestGuard(allow_hosts=("localhost",))
