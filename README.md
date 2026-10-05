@@ -36,8 +36,8 @@ tt-crawl import            with no --template: every post and page of a WordPres
                            --template T: that one collection, from the site's own feed or HTML
 tt-crawl docs              the documents the crawled pages link to, as markdown
 tt-crawl places "Name, City" --out raw/places
-tt-crawl sheet IMAGES… --out F  several pictures as one numbered contact sheet (name a site's logos in one look)
-                           the business's public Google listing (GOOGLE_PLACES_API_KEY)
+                           the business's public Google listing (a GOOGLE_PLACES_API_KEY, or the Google Places Connection)
+tt-crawl sheet IMAGES…     several pictures as one numbered contact sheet, to name a site's logos in one look
 tt-crawl check NEW_URL     the launch check: every old URL requested on the new site
 tt-crawl audit URL         a live site's health: broken links, SEO basics, accessibility, sitemap drift
 tt-crawl playbook [NAME]   the steps for a job (brand, survey, rebuild, import, launch, competitor, reference)
