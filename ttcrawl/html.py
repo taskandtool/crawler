@@ -316,6 +316,18 @@ class PageParser(HTMLParser):
                 "link_href": self._abs(self._link_attrs.get("href", "")) if self._link_text is not None and getattr(self, "_link_attrs", None) else "",
                 "classes": sorted(self._classes(a)), "row": _int(a.get("data-tt-row")),
             })
+        elif tag == "video":
+            # a video is a picture to the media index, flagged; its poster is a picture of its own
+            self._video = {"src": self._abs(a["src"]) if a.get("src") else "", "srcset": [], "srcset_w": [], "alt": "",
+                           "width": _int(a.get("width")), "height": _int(a.get("height")), "landmark": self.landmark,
+                           "video": True, "autoplay": "autoplay" in a}
+            self.images.append(self._video)
+            if a.get("poster"):
+                self.images.append({"src": self._abs(a["poster"]), "srcset": [], "srcset_w": [], "alt": "",
+                                    "width": None, "height": None, "landmark": self.landmark})
+        elif tag == "source" and getattr(self, "_video", None) is not None and not self._video["src"] and a.get("src") \
+                and ((a.get("type") or "").startswith("video/") or re.search(r"\.(mp4|webm|mov)(\?|$)", a["src"], re.I)):
+            self._video["src"] = self._abs(a["src"])
         elif tag == "form":
             self._current_form = {"action": self._abs(a.get("action") or self.base), "method": (a.get("method") or "get").lower(),
                                   "fields": [], "landmark": self.landmark}
@@ -353,6 +365,8 @@ class PageParser(HTMLParser):
 
     def handle_endtag(self, tag):
         self._block_end(tag)
+        if tag == "video":
+            self._video = None
         if tag in ("ul", "ol") and self.landmark and self.list_depth:
             self.list_depth -= 1
         if tag == "title":

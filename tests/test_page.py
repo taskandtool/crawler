@@ -72,6 +72,21 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(p["links"][0]["text"], "unclosed tags")
 
 
+class VideoTests(unittest.TestCase):
+    def test_a_hero_video_is_kept_as_a_video_with_its_poster(self):
+        html = ('<html><body><main><section><video autoplay muted loop playsinline poster="/img/hero-frame.jpg">'
+                '<source src="/media/hero.mp4" type="video/mp4"></video><h1>Tree work</h1></section></main></body></html>')
+        p = parse_page(html, "https://a.com/")
+        m = Media()
+        m.add_page("https://a.com/", [], p["images"])
+        m.classify(None, "a")
+        kinds = {it["original"].split("/")[-1]: it["kind"] for it in m.items.values()}
+        self.assertEqual(kinds["hero.mp4"], "video")
+        self.assertIn("hero-frame.jpg", kinds)
+        self.assertTrue(m.items[[k for k in m.items if k.endswith("hero.mp4")][0]]["autoplay"])
+        self.assertIn("a.com/media/hero.mp4", [i["key"] for i in m.select("brand")])
+
+
 class FurnitureTests(unittest.TestCase):
     def setUp(self):
         self.p = parse_page(BUSINESS_PAGE, URL)

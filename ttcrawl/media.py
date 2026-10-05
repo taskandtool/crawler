@@ -25,6 +25,7 @@ MARK_DIR_RE = re.compile(r"/(partners?|clients?|logos?|sponsors?|memberships?|ce
                          r"affiliations?|associations?)/", re.I)
 MARK_RE = re.compile(r"(?<![a-z])(badges?|seals?|bbb|accredit\w*|certified|certification|sponsors?|as-seen-on)(?![a-z])", re.I)
 MARKS_KEPT = 40
+VIDEOS_KEPT = 4
 STOCK_NAME_RE = re.compile(r"shutterstock|istock|adobestock|gettyimages|depositphotos|stock-photo|pexels|unsplash", re.I)
 WP_SIZE_RE = re.compile(r"-(\d{2,5})x(\d{2,5})(?=\.[a-z0-9]{2,5}$)|-scaled(?=\.[a-z0-9]{2,5}$)|@\dx(?=\.[a-z0-9]{2,5}$)", re.I)
 SHOPIFY_SIZE_RE = re.compile(r"_(?:\d{2,5}x\d{0,5}|x\d{2,5}|small|medium|large|grande|compact|thumb|icon|master)(?:@\dx)?(?=\.[a-z0-9]{2,5}$)", re.I)
@@ -216,6 +217,9 @@ class Media:
                 it["width"], it["height"] = img.get("width"), img.get("height")
             if img.get("row"):
                 it["row"] = max(it["row"] or 0, img["row"])
+            if img.get("video"):
+                it["video"] = True
+                it["autoplay"] = it.get("autoplay") or bool(img.get("autoplay"))
             if not any(p["url"] == url for p in it["pages"]):
                 it["pages"].append({"url": url, "heading": None, "beside": ""})
         if og_image and not og_image.startswith("data:"):
@@ -235,17 +239,18 @@ class Media:
                 kind = "logo"
             elif kind == "logo" and not (len(own) >= 3 and own in re.sub(r"[^a-z0-9]", "", urlsplit(it["original"]).path.lower())):
                 kind = "mark"
-            it["kind"] = kind
+            it["kind"] = "video" if it.get("video") else kind
 
     def select(self, mode):
         """The pictures to fetch, best first. none: nothing; brand: the logo
         candidates, the og:image, and the photographs the most pages show,
         largest first, up to BRAND_PHOTOS; content: the logo and every
         picture in the pages' own content; all: everything seen. Brand keeps
-        others' logos (marks) too: they are the proof a homepage shows."""
+        others' logos (marks) and its videos too: proof and hero material."""
         items = list(self.items.values())
         logos = [i for i in items if i["kind"] == "logo"]
         marks = [i for i in items if i["kind"] == "mark"][:MARKS_KEPT]
+        videos = [i for i in items if i["kind"] == "video"][:VIDEOS_KEPT]
         if mode == "none":
             chosen = []
         elif mode == "all":
@@ -253,7 +258,7 @@ class Media:
         elif mode == "brand":
             photos = sorted((i for i in items if i["kind"] == "photo"),
                             key=lambda i: (-len(i["pages"]), -((i["width"] or 0) * (i["height"] or 0))))
-            chosen = logos + marks + [i for i in items if i["og"]] + photos[:BRAND_PHOTOS]
+            chosen = logos + marks + videos + [i for i in items if i["og"]] + photos[:BRAND_PHOTOS]
         else:
             chosen = logos + [i for i in items if not i["chrome"]]
         return list({i["key"]: i for i in chosen}.values())
