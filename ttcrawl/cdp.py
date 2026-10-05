@@ -16,8 +16,12 @@ import subprocess
 import time
 import urllib.request
 
-STRIP_HEIGHT = 1600
-MAX_STRIPS = 40            # 64,000px; a longer page is noted as truncated
+# What a model sees at full resolution (Claude 4.7 and later): a long edge of
+# at most 2576px and at most 4784 visual tokens, one per 28x28 patch; a larger
+# image is scaled down first and its small text lost.
+MODEL_EDGE, MODEL_TOKENS, PATCH = 2576, 4784, 28
+MAX_STRIPS = 40            # a longer page is noted as truncated
+PAGE_MAX = 16384           # Chrome's largest capture; a longer whole page is scaled to fit
 VIEWPORT = (1440, 1000)
 
 
@@ -360,9 +364,25 @@ class Driver:
             self.browser = None
 
 
-def strip_plan(height, strip=STRIP_HEIGHT, max_strips=MAX_STRIPS):
+def strip_height(width):
+    """The tallest strip a model reads unscaled at `width` (pure): 2576px up
+    to 1456px wide, shorter beyond so the patches stay within budget."""
+    cols = -(-int(width) // PATCH)
+    return min(MODEL_EDGE // PATCH, MODEL_TOKENS // cols) * PATCH
+
+
+def overview_scale(width, height):
+    """The scale that fits a whole `width` x `height` page into one image a
+    model reads unscaled (pure); 1 when it already fits."""
+    by_edge = MODEL_EDGE / max(width, height)
+    by_tokens = PATCH * (MODEL_TOKENS / (width * height)) ** 0.5
+    return min(1.0, by_edge, by_tokens * 0.98)
+
+
+def strip_plan(height, strip=None, max_strips=MAX_STRIPS):
     """(y, h) for each strip of a page `height` tall, and whether it was cut (pure)."""
     height = max(1, int(height))
+    strip = strip or strip_height(1440)
     out, y = [], 0
     while y < height and len(out) < max_strips:
         out.append((y, min(strip, height - y)))
@@ -371,6 +391,14 @@ def strip_plan(height, strip=STRIP_HEIGHT, max_strips=MAX_STRIPS):
 
 
 SETTLE_JS = "document.body ? document.body.innerText.length : 0"
+# Sections an entrance animation keeps invisible until it plays (Elementor,
+# AOS, WOW, Animate.css, GSAP-style reveals), shown as they end up: a
+# screenshot of the page should hold everything a visitor scrolls to.
+REVEAL_JS = """(() => { const css = `.elementor-invisible, [data-aos], .wow, .animate__animated,
+  [class*="reveal"], [style*="opacity: 0"], [style*="opacity:0"] {
+  opacity: 1 !important; visibility: visible !important; transform: none !important;
+  animation: none !important; transition: none !important; }`;
+  const el = document.createElement("style"); el.textContent = css; document.head.appendChild(el); })()"""
 HEIGHT_JS = "Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)"
 
 
@@ -422,20 +450,26 @@ def render(browser, url, styles=False, timeout=45):
     return got
 
 
-def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIGHT,
+def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
                       max_strips=MAX_STRIPS, timeout=45, height=VIEWPORT[1], mobile=False,
                       first_screen=False, allow_hosts=()):
-    """The whole page as PNG strips `01.png`, `02.png`… under `out_dir`, plus
-    `meta.json` (only the first `height` pixels with `first_screen`). Returns
-    the meta dict, or raises CDPError."""
+    """The whole page under `out_dir`: `01.png`, `02.png`… strips a model
+    reads at full resolution, `overview.png` (the whole page scaled to one
+    image a model reads, when there is more than one strip), `page.png` (the
+    whole page at full size, for people) and `meta.json`. Only the first
+    `height` pixels with `first_screen`. Returns the meta dict, or raises
+    CDPError."""
+    strip = strip or strip_height(width)
     s = open_page(browser, url, width=width, timeout=timeout, height=height, mobile=mobile,
                   allow_hosts=allow_hosts)
     try:
         # Lazy images decode as they come into view: walk down the page once,
-        # then wait until the text stops growing.
-        s.evaluate("(async () => { for (let y = 0; y < %s; y += 800) { scrollTo(0, y); "
-                   "await new Promise(r => setTimeout(r, 60)); } scrollTo(0, 0); })()" % HEIGHT_JS,
+        # slowly enough for scroll-triggered sections, then show whatever an
+        # entrance animation still hides and wait until the text stops growing.
+        s.evaluate("(async () => { for (let y = 0; y < %s; y += 600) { scrollTo(0, y); "
+                   "await new Promise(r => setTimeout(r, 150)); } scrollTo(0, 0); })()" % HEIGHT_JS,
                    await_promise=True, timeout=timeout)
+        s.evaluate(REVEAL_JS)
         settle(s)
         page_height = s.evaluate(HEIGHT_JS) or height
         plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
@@ -443,17 +477,22 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=STRIP_HEIG
         for old in os.listdir(out_dir):     # an earlier run's strips and meta
             if old.endswith(".png") or old == "meta.json":
                 os.remove(os.path.join(out_dir, old))
-        files = []
-        for i, (y, h) in enumerate(plan, 1):
+
+        def capture(name, y, h, scale=1):
             shot = s.call("Page.captureScreenshot", {
                 "format": "png", "captureBeyondViewport": True,
-                "clip": {"x": 0, "y": y, "width": width, "height": h, "scale": 1}}, timeout=timeout)
-            name = "%02d.png" % i
+                "clip": {"x": 0, "y": y, "width": width, "height": h, "scale": scale}}, timeout=timeout)
             with open(os.path.join(out_dir, name), "wb") as f:
                 f.write(base64.b64decode(shot["data"]))
-            files.append(name)
+            return name
+
+        files = [capture("%02d.png" % i, y, h) for i, (y, h) in enumerate(plan, 1)]
+        whole = int(min(page_height, sum(h for _, h in plan)))
+        page = capture("page.png", 0, whole, min(1.0, PAGE_MAX / whole)) if len(files) > 1 else files[0]
+        overview = capture("overview.png", 0, whole, overview_scale(width, whole)) if len(files) > 1 else None
         meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
-                "strips": files, "truncated": truncated, "engine": browser.engine}
+                "strips": files, "page": page, "overview": overview, "truncated": truncated,
+                "engine": browser.engine}
         with open(os.path.join(out_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
         return meta

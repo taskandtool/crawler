@@ -170,7 +170,8 @@ class PageParser(HTMLParser):
             if src and not src.startswith("data:") and not ICON_SRC_RE.search(src) \
                     and not (width and width < MIN_BLOCK_IMAGE_PX):
                 self._new_block("img", src=self._abs(src), alt=htmlmod.unescape(a.get("alt") or "").strip(),
-                                srcset=self._srcset(a.get("srcset") or a.get("data-srcset") or ""))
+                                srcset=self._srcset(a.get("srcset") or a.get("data-srcset") or ""),
+                                shown=_int(a.get("data-tt-sw")))
         if a.get("data-tt-bg"):
             self._end_loose()
             self._new_block("img", src=a["data-tt-bg"], alt="", background=True)

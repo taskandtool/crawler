@@ -16,6 +16,10 @@ STOCK_HOSTS = ("unsplash.com", "pexels.com", "shutterstock.com", "istockphoto.co
                "adobestock", "freepik.com", "dreamstime.com", "depositphotos")
 ICON_RE = re.compile(r"icon|sprite|arrow|chevron|bullet|check|star|social|favicon", re.I)
 THEME_RE = re.compile(r"/themes?/|/theme-assets/|/assets/(img|images)/(bg|pattern|texture|placeholder)|placeholder|pattern|texture|/plugins/", re.I)
+# Someone else's logo: an association, a certification, a partner, a client.
+MARK_RE = re.compile(r"badge|member|certif|accredit|partner|sponsor|award|association|affiliat|seal|\bbbb\b|"
+                     r"trust|client|as-seen|featured|press-logo", re.I)
+MARKS_KEPT = 40
 STOCK_NAME_RE = re.compile(r"shutterstock|istock|adobestock|gettyimages|depositphotos|stock-photo|pexels|unsplash", re.I)
 WP_SIZE_RE = re.compile(r"-(\d{2,5})x(\d{2,5})(?=\.[a-z0-9]{2,5}$)|-scaled(?=\.[a-z0-9]{2,5}$)|@\dx(?=\.[a-z0-9]{2,5}$)", re.I)
 SHOPIFY_SIZE_RE = re.compile(r"_(?:\d{2,5}x\d{0,5}|x\d{2,5}|small|medium|large|grande|compact|thumb|icon|master)(?:@\dx)?(?=\.[a-z0-9]{2,5}$)", re.I)
@@ -36,6 +40,18 @@ def guess_kind(img, logo_src=None):
         return "logo"
     if src.endswith(".svg") or ICON_RE.search(src) or (w and h and w <= 64 and h <= 64):
         return "icon"
+    if MARK_RE.search(src) or MARK_RE.search(alt):
+        return "mark"
+    # a logo strip or carousel: short, wide, not a photograph's format
+    if w and h and h <= 300 and w >= 2 * h and not src.endswith((".jpg", ".jpeg")):
+        return "mark"
+    # a picture file shown far smaller than it is, with no words: a badge
+    shown = img.get("shown")
+    if shown and shown <= 260 and not alt and w and w > shown and not src.endswith((".jpg", ".jpeg")):
+        return "mark"
+    # a small picture in the header or footer is a badge, never decoration
+    if img.get("landmark") in ("header", "footer") and w and h and max(w, h) <= 400:
+        return "mark"
     if any(s in host for s in STOCK_HOSTS) or STOCK_NAME_RE.search(src):
         return "stock"
     if THEME_RE.search(src) or (img.get("landmark") in ("header", "footer") and not alt):
@@ -149,7 +165,7 @@ class Media:
         if it is None:
             it = self.items[key] = {"key": key, "original": original, "seen": [], "srcset": [], "file": None,
                                     "width": None, "height": None, "bytes": None, "alts": [], "pages": [],
-                                    "chrome": True, "background": False, "og": False, "kind": None}
+                                    "chrome": True, "background": False, "og": False, "kind": None, "shown": None}
         if src not in it["seen"]:
             it["seen"].append(src)
         it["srcset"].extend(list(c) for c in srcset if list(c) not in it["srcset"])
@@ -171,6 +187,8 @@ class Media:
                 continue
             beside = next((x["text"] for x in blocks[i + 1:i + 3] if x["tag"] != "img" and x["text"]), "")
             it = self._item(b["src"], b.get("srcset") or [], b.get("alt"), bool(b.get("chrome")), bool(b.get("background")))
+            if b.get("shown"):
+                it["shown"] = max(it["shown"] or 0, b["shown"])
             if not any(p["url"] == url for p in it["pages"]):
                 it["pages"].append({"url": url, "heading": heading, "beside": beside[:200]})
         for img in images:
@@ -193,7 +211,8 @@ class Media:
         own = re.sub(r"[^a-z0-9]", "", (site_name or "").lower())
         for it in self.items.values():
             kind = guess_kind({"src": it["original"], "alt": (it["alts"] or [""])[0], "width": it["width"],
-                               "height": it["height"], "landmark": "header" if it["chrome"] else None})
+                               "height": it["height"], "landmark": "header" if it["chrome"] else None,
+                               "shown": it.get("shown")})
             if it["key"] == logo_key:
                 kind = "logo"
             elif kind == "logo" and not (len(own) >= 3 and own in re.sub(r"[^a-z0-9]", "", urlsplit(it["original"]).path.lower())):
@@ -204,9 +223,11 @@ class Media:
         """The pictures to fetch, best first. none: nothing; brand: the logo
         candidates, the og:image, and the photographs the most pages show,
         largest first, up to BRAND_PHOTOS; content: the logo and every
-        picture in the pages' own content; all: everything seen."""
+        picture in the pages' own content; all: everything seen. Brand keeps
+        others' logos (marks) too: they are the proof a homepage shows."""
         items = list(self.items.values())
         logos = [i for i in items if i["kind"] == "logo"]
+        marks = [i for i in items if i["kind"] == "mark"][:MARKS_KEPT]
         if mode == "none":
             chosen = []
         elif mode == "all":
@@ -214,7 +235,7 @@ class Media:
         elif mode == "brand":
             photos = sorted((i for i in items if i["kind"] == "photo"),
                             key=lambda i: (-len(i["pages"]), -((i["width"] or 0) * (i["height"] or 0))))
-            chosen = logos + [i for i in items if i["og"]] + photos[:BRAND_PHOTOS]
+            chosen = logos + marks + [i for i in items if i["og"]] + photos[:BRAND_PHOTOS]
         else:
             chosen = logos + [i for i in items if not i["chrome"]]
         return list({i["key"]: i for i in chosen}.values())

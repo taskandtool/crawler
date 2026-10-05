@@ -51,6 +51,8 @@ EXTRACT_JS = r"""
   for (const img of document.images) {
     if (img.currentSrc) img.setAttribute("data-tt-src", img.currentSrc);
     if (img.naturalWidth) { img.setAttribute("data-tt-w", img.naturalWidth); img.setAttribute("data-tt-h", img.naturalHeight); }
+    const shown = img.getBoundingClientRect();     // the size the page shows it at
+    if (shown.width > 1 && shown.height > 1) img.setAttribute("data-tt-sw", Math.round(Math.max(shown.width, shown.height)));
   }
   const all = document.body ? document.body.querySelectorAll("*") : [];
   for (let i = 0; i < all.length && i < 6000; i++) {

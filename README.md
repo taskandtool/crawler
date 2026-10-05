@@ -64,7 +64,7 @@ summary line; `check` and `audit` exit 1 when something needs fixing.
 raw/site/<host>/            the site (www. dropped); raw/external/<host>/ for someone else's
   pages/<name>.md           one file per page: frontmatter, then the page's own text, verbatim
   images/                   each picture once, at its largest, under a readable name
-  shots/<name>/             with --screenshots: the whole page as 1600px strips
+  shots/<name>/             with --screenshots: overview.png (the whole page in one image a model reads), strips a model reads unscaled (2576px tall at desktop width), page.png (the whole page, for people)
   structured/<name>.json    per-page JSON-LD, Open Graph, microdata, tracking IDs, embeds;
                             business.json merged from them
   docs/                     the linked documents as markdown (tt-crawl docs), originals in docs/_files/

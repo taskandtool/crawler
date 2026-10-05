@@ -73,8 +73,10 @@ class MediaTests(unittest.TestCase):
         m.items["a.com/acme-logo-white.png"]["kind"] = "theme"
         chosen = m.select("brand")
         self.assertEqual(chosen[0]["key"], "a.com/logo.svg")
-        self.assertEqual(len(chosen), 1 + 60)
-        self.assertEqual(len(chosen[1]["pages"]), 3)                  # the photos more pages show come first
+        # the logo, the partners' logos (proof for a homepage), then 60 photographs
+        self.assertEqual(chosen[1]["key"], "acme.com/uploads/ifa-member-logo.jpg")
+        self.assertEqual(len(chosen), 1 + 1 + 60)
+        self.assertEqual(len(chosen[2]["pages"]), 3)                  # the photos more pages show come first
 
 
 class FactsTests(unittest.TestCase):

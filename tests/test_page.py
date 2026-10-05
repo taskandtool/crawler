@@ -145,6 +145,23 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(guess_kind({"src": "https://a.com/wp-content/themes/x/bg-pattern.png", "alt": ""}), "theme")
         self.assertEqual(guess_kind({"src": "https://a.com/uploads/crew.jpg", "alt": "crew"}), "photo")
 
+    def test_other_peoples_logos_are_marks(self):
+        # named for what it is
+        self.assertEqual(guess_kind({"src": "https://a.com/uploads/nahad-member-badge.png", "alt": ""}), "mark")
+        # a strip or carousel logo: short and wide, no alt
+        self.assertEqual(guess_kind({"src": "https://a.com/uploads/47381.png", "alt": "", "width": 320, "height": 90}), "mark")
+        # a small picture in the footer
+        self.assertEqual(guess_kind({"src": "https://a.com/uploads/Unknown.png", "alt": "", "width": 99, "height": 43,
+                                     "landmark": "footer"}), "mark")
+        # a picture file the page shows at badge size
+        self.assertEqual(guess_kind({"src": "https://a.com/uploads/Unknown-1.png", "alt": "", "width": 496, "height": 396,
+                                     "shown": 55}), "mark")
+        # a gallery thumbnail stays a photograph
+        self.assertEqual(guess_kind({"src": "https://a.com/uploads/job-3.jpg", "alt": "", "width": 2000, "height": 1500,
+                                     "shown": 200}), "photo")
+        # a wide photograph stays a photograph
+        self.assertEqual(guess_kind({"src": "https://a.com/uploads/panorama.jpg", "alt": "", "width": 2400, "height": 600}), "photo")
+
     def test_media_one_picture_across_its_sizes(self):
         p = parse_page(BUSINESS_PAGE, URL)
         media = Media()

@@ -18,10 +18,26 @@ class FakeDriver:
         if self.fail:
             raise cdp.CDPError("net::ERR_CONNECTION_REFUSED")
         self.calls.append(fn)
-        return {"strips": ["01.png", "02.png"], "height": 3000, "truncated": False}
+        return {"strips": ["01.png", "02.png"], "page": "page.png", "overview": "overview.png", "height": 3000, "truncated": False}
 
     def stop(self):
         self.stopped = True
+
+
+class SizeTest(unittest.TestCase):
+    def test_strips_are_as_tall_as_a_model_reads_unscaled(self):
+        self.assertEqual(cdp.strip_height(1280), 2576)
+        self.assertEqual(cdp.strip_height(1440), 2576)
+        self.assertEqual(cdp.strip_height(390), 2576)
+        # wider than 1456: fewer rows, so the patches stay within 4784
+        h = cdp.strip_height(1920)
+        self.assertLessEqual(-(-1920 // 28) * (h // 28), cdp.MODEL_TOKENS)
+
+    def test_the_overview_fits_the_whole_page_into_one_readable_image(self):
+        s = cdp.overview_scale(1280, 6400)
+        self.assertLessEqual(6400 * s, cdp.MODEL_EDGE)
+        self.assertLessEqual(-(-int(1280 * s) // 28) * -(-int(6400 * s) // 28), cdp.MODEL_TOKENS)
+        self.assertEqual(cdp.overview_scale(800, 600), 1.0)
 
 
 class ShootTest(unittest.TestCase):
@@ -39,9 +55,9 @@ class ShootTest(unittest.TestCase):
     def test_the_summary_says_where_to_look_and_what_next(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(), status=lambda u: 200)
         text = shoot.report("http://localhost:3000/", results, False)
-        self.assertIn("uploads/home-1280/01.png … 02.png", text)
-        self.assertIn("read in order", text)
-        self.assertIn("Next: look at each image", text)
+        self.assertIn("uploads/home-1280/overview.png, then 01.png … 02.png", text)
+        self.assertIn("page.png is the whole page for people", text)
+        self.assertIn("Next: look at each overview", text)
 
     def test_a_failure_says_how_to_check_the_page_is_served(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(fail=True), status=lambda u: 200)

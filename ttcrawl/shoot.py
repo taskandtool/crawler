@@ -1,6 +1,8 @@
 """`tt-crawl shoot`: one page as screenshots at the widths that matter, for an
-agent to look at its own work. The whole page as strips (the size a model
-reads well), or only the first screen. It may open this machine's own dev
+agent to look at its own work. The whole page as `overview.png` (all of it in
+one image a model reads, to judge its shape), strips at the full resolution a
+model reads (to judge the detail), and `page.png` (the whole page at full
+size, for people); or only the first screen. It may open this machine's own dev
 server (localhost); every other private address stays refused.
 """
 import json
@@ -11,7 +13,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
-from . import cdp, chrome
+from . import cdp, chrome, net
 
 # A phone is 390 wide (the common iPhone) and its first screen 844 tall; a
 # desktop first screen is 1000 at any width.
@@ -28,7 +30,10 @@ def name_for(url):
 def page_status(url, timeout=15):
     """The page's HTTP status, or None when nothing answers."""
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=timeout) as r:
+        # the crawler's own name: a firewall that refuses Python's default one
+        # would make a page Chrome loads look like an error page
+        req = urllib.request.Request(url, method="GET", headers={"User-Agent": net.USER_AGENT})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status
     except urllib.error.HTTPError as e:
         return e.code
@@ -78,13 +83,15 @@ def report(url, results, first_screen):
             continue
         strips = meta["strips"]
         cut = ", cut off at %d strips" % len(strips) if meta.get("truncated") else ""
-        lines.append("  %dpx: %s/%s  (page %dpx tall, %d image%s%s)" % (
-            width, meta["dir"], strips[0] if len(strips) == 1 else "01.png … %s" % strips[-1],
-            meta["height"], len(strips), "" if len(strips) == 1 else "s, read in order", cut))
+        if len(strips) == 1:
+            lines.append("  %dpx: %s/%s  (page %dpx tall, one image%s)" % (width, meta["dir"], strips[0], meta["height"], cut))
+        else:
+            lines.append("  %dpx: %s/overview.png, then 01.png … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
+                width, meta["dir"], strips[-1], meta["height"], cut))
     if any(m.get("error") for _, m in results):
         lines.append("Is the page served at that path? curl -s -o /dev/null -w '%{http_code}' " + url)
     else:
-        lines.append("Next: look at each image, in order.")
+        lines.append("Next: look at each overview for the page's shape, then its strips in order for the detail.")
     return "\n".join(lines)
 
 
