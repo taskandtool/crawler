@@ -162,6 +162,9 @@ class MediaTests(unittest.TestCase):
         # a JPEG logo in a row of logos (a carousel of customers)
         self.assertEqual(guess_kind({"src": "https://a.com/uploads/download.jpg", "alt": "", "width": 400, "height": 120,
                                      "row": 5}), "mark")
+        # a row of social icons or reviewers' avatars is not a row of logos
+        self.assertNotEqual(guess_kind({"src": "https://a.com/img/instagram@2x.png", "alt": "", "width": 96, "height": 96, "row": 4}), "mark")
+        self.assertNotEqual(guess_kind({"src": "https://a.com/u/avatar-17.png", "alt": "", "width": 120, "height": 120, "row": 6}), "mark")
         # an SVG partner logo, by its folder
         self.assertEqual(guess_kind({"src": "https://a.com/partners/acme.svg", "alt": ""}), "mark")
         # words that only look like badges stay photographs

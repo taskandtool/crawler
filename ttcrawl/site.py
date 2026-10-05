@@ -616,7 +616,8 @@ class Crawl:
         facts.from_jsonld(business, self.start)
         for page in self.pages():
             jr, jratings = jsonld_reviews(page["structured"]["jsonld"], page["url"])
-            ratings.extend(jratings)
+            # a rating in a shared template repeats on every page: keep it once
+            ratings.extend(r for r in jratings if not any((x["value"], x["count"]) == (r["value"], r["count"]) for x in ratings))
             for r in page["reviews"] + jr:
                 if not any(x["quote"] == r["quote"] for x in all_reviews):
                     all_reviews.append(r)

@@ -19,6 +19,8 @@ THEME_RE = re.compile(r"/themes?/|/theme-assets/|/assets/(img|images)/(bg|patter
 # Words that name a badge rather than a photograph, as whole words of a file
 # name or alt text ("seal" is a badge, "sealcoating" is not). A partner's or
 # client's file named "logo" is caught by the logo rule and made a mark.
+SOCIAL_RE = re.compile(r"facebook|instagram|twitter|linkedin|youtube|tiktok|pinterest|whatsapp|(?<![a-z])x-logo", re.I)
+AVATAR_RE = re.compile(r"avatar|profile|gravatar|headshot|user-?photo|reviewer", re.I)
 MARK_DIR_RE = re.compile(r"/(partners?|clients?|logos?|sponsors?|memberships?|certifications?|accreditations?|"
                          r"affiliations?|associations?)/", re.I)
 MARK_RE = re.compile(r"(?<![a-z])(badges?|seals?|bbb|accredit\w*|certified|certification|sponsors?|as-seen-on)(?![a-z])", re.I)
@@ -48,8 +50,9 @@ def guess_kind(img, logo_src=None):
         return "icon"
     if MARK_RE.search(name) or MARK_RE.search(alt) or MARK_DIR_RE.search(path):
         return "mark"
-    # one of a row of small pictures (a logo strip or carousel), in any format
-    if (img.get("row") or 0) >= 3:
+    # one of a row of small pictures (a logo strip or carousel), in any format;
+    # a row of social icons or reviewers' avatars is not
+    if (img.get("row") or 0) >= 3 and not SOCIAL_RE.search(name + " " + alt) and not AVATAR_RE.search(name + " " + alt):
         return "mark"
     # a logo strip or carousel: short, wide, small, not a photograph's format
     if w and h and h <= 200 and 2 * h <= w <= 1000 and not jpeg:
