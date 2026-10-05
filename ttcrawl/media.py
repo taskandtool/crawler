@@ -16,9 +16,12 @@ STOCK_HOSTS = ("unsplash.com", "pexels.com", "shutterstock.com", "istockphoto.co
                "adobestock", "freepik.com", "dreamstime.com", "depositphotos")
 ICON_RE = re.compile(r"icon|sprite|arrow|chevron|bullet|check|star|social|favicon", re.I)
 THEME_RE = re.compile(r"/themes?/|/theme-assets/|/assets/(img|images)/(bg|pattern|texture|placeholder)|placeholder|pattern|texture|/plugins/", re.I)
-# Someone else's logo: an association, a certification, a partner, a client.
-MARK_RE = re.compile(r"badge|member|certif|accredit|partner|sponsor|award|association|affiliat|seal|\bbbb\b|"
-                     r"trust|client|as-seen|featured|press-logo", re.I)
+# Words that name a badge rather than a photograph, as whole words of a file
+# name or alt text ("seal" is a badge, "sealcoating" is not). A partner's or
+# client's file named "logo" is caught by the logo rule and made a mark.
+MARK_DIR_RE = re.compile(r"/(partners?|clients?|logos?|sponsors?|memberships?|certifications?|accreditations?|"
+                         r"affiliations?|associations?)/", re.I)
+MARK_RE = re.compile(r"(?<![a-z])(badges?|seals?|bbb|accredit\w*|certified|certification|sponsors?|as-seen-on)(?![a-z])", re.I)
 MARKS_KEPT = 40
 STOCK_NAME_RE = re.compile(r"shutterstock|istock|adobestock|gettyimages|depositphotos|stock-photo|pexels|unsplash", re.I)
 WP_SIZE_RE = re.compile(r"-(\d{2,5})x(\d{2,5})(?=\.[a-z0-9]{2,5}$)|-scaled(?=\.[a-z0-9]{2,5}$)|@\dx(?=\.[a-z0-9]{2,5}$)", re.I)
@@ -33,25 +36,30 @@ def guess_kind(img, logo_src=None):
     src = (img.get("src") or "").lower()
     alt = (img.get("alt") or "").lower()
     host = (urlsplit(src).hostname or "").lower()
+    path = urlsplit(src).path               # the file, without host or query string
+    name = path.rsplit("/", 1)[-1]
     w, h = img.get("width"), img.get("height")
+    jpeg = path.endswith((".jpg", ".jpeg"))
     if logo_src and src == logo_src.lower():
         return "logo"
-    if "logo" in src or "logo" in alt:
+    if "logo" in name or "logo" in alt:
         return "logo"
-    if src.endswith(".svg") or ICON_RE.search(src) or (w and h and w <= 64 and h <= 64):
+    if w and h and w <= 64 and h <= 64:
         return "icon"
-    if MARK_RE.search(src) or MARK_RE.search(alt):
+    if MARK_RE.search(name) or MARK_RE.search(alt) or MARK_DIR_RE.search(path):
         return "mark"
-    # a logo strip or carousel: short, wide, not a photograph's format
-    if w and h and h <= 300 and w >= 2 * h and not src.endswith((".jpg", ".jpeg")):
+    # a logo strip or carousel: short, wide, small, not a photograph's format
+    if w and h and h <= 200 and 2 * h <= w <= 1000 and not jpeg:
         return "mark"
     # a picture file shown far smaller than it is, with no words: a badge
     shown = img.get("shown")
-    if shown and shown <= 260 and not alt and w and w > shown and not src.endswith((".jpg", ".jpeg")):
+    if shown and shown <= 260 and not alt and not jpeg and ((w and w > shown) or path.endswith(".svg")):
         return "mark"
-    # a small picture in the header or footer is a badge, never decoration
-    if img.get("landmark") in ("header", "footer") and w and h and max(w, h) <= 400:
+    # a small wordless picture in the header or footer, not a photograph: a badge
+    if img.get("landmark") in ("header", "footer") and w and h and max(w, h) <= 400 and not alt and not jpeg:
         return "mark"
+    if path.endswith(".svg") or ICON_RE.search(name):
+        return "icon"
     if any(s in host for s in STOCK_HOSTS) or STOCK_NAME_RE.search(src):
         return "stock"
     if THEME_RE.search(src) or (img.get("landmark") in ("header", "footer") and not alt):

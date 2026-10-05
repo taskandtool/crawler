@@ -22,6 +22,7 @@ import urllib.request
 MODEL_EDGE, MODEL_TOKENS, PATCH = 2576, 4784, 28
 MAX_STRIPS = 40            # a longer page is noted as truncated
 PAGE_MAX = 16384           # Chrome's largest capture; a longer whole page is scaled to fit
+OVERVIEW_MIN = 0.25        # a page that must shrink further gets no overview (about 10,000px tall)
 VIEWPORT = (1440, 1000)
 
 
@@ -391,11 +392,12 @@ def strip_plan(height, strip=None, max_strips=MAX_STRIPS):
 
 
 SETTLE_JS = "document.body ? document.body.innerText.length : 0"
-# Sections an entrance animation keeps invisible until it plays (Elementor,
-# AOS, WOW, Animate.css, GSAP-style reveals), shown as they end up: a
-# screenshot of the page should hold everything a visitor scrolls to.
-REVEAL_JS = """(() => { const css = `.elementor-invisible, [data-aos], .wow, .animate__animated,
-  [class*="reveal"], [style*="opacity: 0"], [style*="opacity:0"] {
+# Sections an entrance animation keeps invisible until it plays, shown as
+# they end up: a screenshot of the page should hold everything a visitor
+# scrolls to. Only the animation libraries' own markers (Elementor, AOS,
+# WOW, Animate.css): a selector on opacity or a "reveal" class would also
+# show overlays, closed menus, modals and preloaders.
+REVEAL_JS = """(() => { const css = `.elementor-invisible, [data-aos], .wow, .animate__animated {
   opacity: 1 !important; visibility: visible !important; transform: none !important;
   animation: none !important; transition: none !important; }`;
   const el = document.createElement("style"); el.textContent = css; document.head.appendChild(el); })()"""
@@ -489,7 +491,9 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
         files = [capture("%02d.png" % i, y, h) for i, (y, h) in enumerate(plan, 1)]
         whole = int(min(page_height, sum(h for _, h in plan)))
         page = capture("page.png", 0, whole, min(1.0, PAGE_MAX / whole)) if len(files) > 1 else files[0]
-        overview = capture("overview.png", 0, whole, overview_scale(width, whole)) if len(files) > 1 else None
+        # past a quarter of its size an overview is a sliver; the strips say it all
+        scale = overview_scale(width, whole)
+        overview = capture("overview.png", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
         meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
                 "strips": files, "page": page, "overview": overview, "truncated": truncated,
                 "engine": browser.engine}

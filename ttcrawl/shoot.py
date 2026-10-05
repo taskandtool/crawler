@@ -85,13 +85,17 @@ def report(url, results, first_screen):
         cut = ", cut off at %d strips" % len(strips) if meta.get("truncated") else ""
         if len(strips) == 1:
             lines.append("  %dpx: %s/%s  (page %dpx tall, one image%s)" % (width, meta["dir"], strips[0], meta["height"], cut))
+        elif not meta.get("overview"):
+            lines.append("  %dpx: %s/01.png … %s  (page %dpx tall, too long for one overview; read in order%s; "
+                         "page.png is the whole page for people)" % (width, meta["dir"], strips[-1], meta["height"], cut))
         else:
             lines.append("  %dpx: %s/overview.png, then 01.png … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
                 width, meta["dir"], strips[-1], meta["height"], cut))
     if any(m.get("error") for _, m in results):
         lines.append("Is the page served at that path? curl -s -o /dev/null -w '%{http_code}' " + url)
     else:
-        lines.append("Next: look at each overview for the page's shape, then its strips in order for the detail.")
+        lines.append("Next: look at each overview for the page's shape, then its strips in order for the detail."
+                     if any(m.get("overview") for _, m in results) else "Next: look at each image, in order.")
     return "\n".join(lines)
 
 

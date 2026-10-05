@@ -159,6 +159,17 @@ class MediaTests(unittest.TestCase):
         # a gallery thumbnail stays a photograph
         self.assertEqual(guess_kind({"src": "https://a.com/uploads/job-3.jpg", "alt": "", "width": 2000, "height": 1500,
                                      "shown": 200}), "photo")
+        # an SVG partner logo, by its folder
+        self.assertEqual(guess_kind({"src": "https://a.com/partners/acme.svg", "alt": ""}), "mark")
+        # words that only look like badges stay photographs
+        for src, alt in [("https://trustedroofing.com/uploads/roof.jpg", ""), ("https://a.com/team-member-sarah.jpg", ""),
+                         ("https://a.com/sealcoating-driveway.jpg", ""), ("https://a.com/uploads/x.jpg", "Happy client with new roof")]:
+            self.assertEqual(guess_kind({"src": src, "alt": alt}), "photo", src)
+        # a banner, a JPEG with a query string, a footer photograph: not marks
+        self.assertNotEqual(guess_kind({"src": "https://a.com/banner.png", "alt": "", "width": 1200, "height": 300}), "mark")
+        self.assertNotEqual(guess_kind({"src": "https://a.com/x.jpg?v=169", "alt": "", "width": 900, "height": 150}), "mark")
+        self.assertNotEqual(guess_kind({"src": "https://a.com/insta1.jpg", "alt": "", "width": 300, "height": 300,
+                                        "landmark": "footer"}), "mark")
         # a wide photograph stays a photograph
         self.assertEqual(guess_kind({"src": "https://a.com/uploads/panorama.jpg", "alt": "", "width": 2400, "height": 600}), "photo")
 
