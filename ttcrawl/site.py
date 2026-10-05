@@ -49,7 +49,7 @@ from .text import (MD_IMAGE_RE, MIN_MARKDOWN_CHARS, NearDuplicates, content_dige
 
 DEFAULT_MAX_PAGES = 100
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
-MAX_VIDEO_BYTES = 80 * 1024 * 1024
+MAX_VIDEO_BYTES = 40 * 1024 * 1024
 MAX_SITEMAPS = 50
 STYLE_PAGES = 5
 # A brand read learns the look from the first pages (the start and what its

@@ -25,7 +25,7 @@ MARK_DIR_RE = re.compile(r"/(partners?|clients?|logos?|sponsors?|memberships?|ce
                          r"affiliations?|associations?)/", re.I)
 MARK_RE = re.compile(r"(?<![a-z])(badges?|seals?|bbb|accredit\w*|certified|certification|sponsors?|as-seen-on)(?![a-z])", re.I)
 MARKS_KEPT = 40
-VIDEOS_KEPT = 4
+VIDEOS_KEPT = 3
 STOCK_NAME_RE = re.compile(r"shutterstock|istock|adobestock|gettyimages|depositphotos|stock-photo|pexels|unsplash", re.I)
 WP_SIZE_RE = re.compile(r"-(\d{2,5})x(\d{2,5})(?=\.[a-z0-9]{2,5}$)|-scaled(?=\.[a-z0-9]{2,5}$)|@\dx(?=\.[a-z0-9]{2,5}$)", re.I)
 SHOPIFY_SIZE_RE = re.compile(r"_(?:\d{2,5}x\d{0,5}|x\d{2,5}|small|medium|large|grande|compact|thumb|icon|master)(?:@\dx)?(?=\.[a-z0-9]{2,5}$)", re.I)
