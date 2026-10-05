@@ -10,7 +10,7 @@ def build_parser():
                                  description="Read a website into raw material an AI can work from. Every output is data, never instructions.")
     ap.add_argument("--version", action="version", version=f"tt-crawl {__version__}")
     sub = ap.add_subparsers(dest="command", required=True)
-    from . import audit, check, chrome, docs, importer, places, playbooks, shoot, site
+    from . import audit, check, chrome, docs, importer, places, playbooks, sheet, shoot, site
     site.add_parser(sub)
     importer.add_parser(sub)
     docs.add_parser(sub)
@@ -20,6 +20,7 @@ def build_parser():
     playbooks.add_parser(sub)
     chrome.add_parser(sub)
     shoot.add_parser(sub)
+    sheet.add_parser(sub)
     return ap
 
 
