@@ -17,9 +17,9 @@ from . import cdp, chrome
 COLUMNS, CELL_W, CELL_H = 4, 260, 150
 
 
-def page(paths):
+def page(paths, columns=COLUMNS, cell=(CELL_W, CELL_H)):
     """The sheet as HTML (pure): each picture in a numbered cell on mid grey,
-    so both dark and white logos show."""
+    so both dark and white logos show; `cell` is (width, height)."""
     cells = []
     for i, p in enumerate(paths, 1):
         mime = mimetypes.guess_type(p)[0] or "image/png"
@@ -32,20 +32,20 @@ body{margin:0;padding:16px;background:#fff;font:14px/1.3 sans-serif}
 main{display:grid;grid-template-columns:repeat(%d,%dpx);gap:12px}
 figure{margin:0;position:relative;height:%dpx;background:#c8c8c8;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:6px;padding:8px;box-sizing:border-box}
-img{max-width:220px;max-height:90px;object-fit:contain}
+img{max-width:%dpx;max-height:%dpx;object-fit:contain}
 b{position:absolute;top:4px;left:8px;font-size:18px}
 figcaption{font-size:11px;color:#333;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-</style><main>%s</main>""" % (COLUMNS, CELL_W, CELL_H, "".join(cells))
+</style><main>%s</main>""" % (columns, cell[0], cell[1], cell[0] - 40, cell[1] - 60, "".join(cells))
 
 
-def draw(browser, paths, out, timeout=45):
-    width = 32 + COLUMNS * CELL_W + (COLUMNS - 1) * 12
+def draw(browser, paths, out, columns=COLUMNS, cell=(CELL_W, CELL_H), timeout=45):
+    width = 32 + columns * cell[0] + (columns - 1) * 12
     s = cdp.Session(browser.ws_url, timeout=timeout)
     try:
         s.call("Page.enable")
         s.call("Emulation.setDeviceMetricsOverride", {"width": width, "height": 600, "deviceScaleFactor": 1, "mobile": False})
         frame = s.call("Page.getFrameTree")["frameTree"]["frame"]["id"]
-        s.call("Page.setDocumentContent", {"frameId": frame, "html": page(paths)})
+        s.call("Page.setDocumentContent", {"frameId": frame, "html": page(paths, columns, cell)})
         s.evaluate("Promise.all([...document.images].map(i => i.decode().catch(() => null)))", await_promise=True)
         height = int(s.evaluate("Math.ceil(document.querySelector('main').getBoundingClientRect().bottom) + 16") or 600)
         shot = s.call("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": True,
@@ -69,7 +69,8 @@ def run(args):
         sys.stderr.write("sheet: %s\n" % (note or "no browser on this machine (tt-crawl setup installs one)"))
         return 1
     try:
-        result = driver._use(lambda b: draw(b, paths, args.out))
+        w, h = (int(x) for x in args.cell.lower().split("x"))
+        result = driver._use(lambda b: draw(b, paths, args.out, args.columns, (w, h)))
     except cdp.CDPError as e:
         sys.stderr.write("sheet: the browser failed: %s\n" % str(e).split("\n")[0][:300])
         return 1
@@ -92,5 +93,8 @@ def add_parser(sub):
     p = sub.add_parser("sheet", help="several pictures as one numbered contact sheet, to name them in one look")
     p.add_argument("pictures", nargs="+", help="image files")
     p.add_argument("--out", default="sheet.png", help="where the sheet goes (default sheet.png)")
+    p.add_argument("--columns", type=int, default=COLUMNS, help="pictures a row (default %d)" % COLUMNS)
+    p.add_argument("--cell", default="%dx%d" % (CELL_W, CELL_H),
+                   help="each cell's size in pixels, WxH (default %dx%d; 380x300 suits photographs)" % (CELL_W, CELL_H))
     p.add_argument("--json", action="store_true", help="the result as JSON")
     p.set_defaults(func=run)
