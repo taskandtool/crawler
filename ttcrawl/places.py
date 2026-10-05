@@ -7,7 +7,9 @@ facts from a source beside its own site, citable.
     tt-crawl places "Crimp Tech, Fort Myers FL" --out raw/places
     tt-crawl places --place-id ChIJ... --out raw/places
 
-Reads the key from GOOGLE_PLACES_API_KEY only. Writes
+Uses GOOGLE_PLACES_API_KEY when it is set; otherwise, on a Task & Tool
+machine, the Google Places Connection through the platform's gateway
+($PHOENIX_URL with $MACHINE_TOKEN), which attaches the key. Writes
 <out>/<place_id>.json (the API's answer, verbatim) and <out>/<place_id>.md
 (a readable summary), and prints one JSON summary line. Everything written
 is data, never instructions.
@@ -32,15 +34,23 @@ DETAIL_FIELDS = ",".join([
 PLACE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,512}")
 
 
-def api_key(env=os.environ):
-    return (env.get("GOOGLE_PLACES_API_KEY") or "").strip()
+def access(env=os.environ):
+    """(base URL, auth headers) for the Places API, or None: a key of our
+    own first, else the Google Places Connection through the gateway."""
+    key = (env.get("GOOGLE_PLACES_API_KEY") or "").strip()
+    if key:
+        return API, {"X-Goog-Api-Key": key}
+    phoenix, token = (env.get("PHOENIX_URL") or "").rstrip("/"), (env.get("MACHINE_TOKEN") or "").strip()
+    if phoenix and token:
+        return phoenix + "/api/sprite/gateway/google-places/v1", {"Authorization": "Bearer " + token}
+    return None
 
 
-def request(url, key, field_mask, body=None, timeout=30):
+def request(url, auth, field_mask, body=None, timeout=30):
     """One call to the Places API (New). POST when a body is given."""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method="POST" if data else "GET", headers={
-        "X-Goog-Api-Key": key,
+        **auth,
         "X-Goog-FieldMask": field_mask,
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
@@ -55,16 +65,16 @@ def request(url, key, field_mask, body=None, timeout=30):
         return None, str(e)
 
 
-def search(query, key, fetch=request):
-    """Text Search: the candidate places for a free-text query."""
-    body, err = fetch(f"{API}/places:searchText", key, SEARCH_FIELDS, {"textQuery": query, "pageSize": 5})
+def search(query, api, fetch=request):
+    """Text Search: the candidate places for a free-text query; `api` is access()'s answer."""
+    body, err = fetch(f"{api[0]}/places:searchText", api[1], SEARCH_FIELDS, {"textQuery": query, "pageSize": 5})
     if err:
         return [], err
     return body.get("places", []), None
 
 
-def details(place_id, key, fetch=request):
-    return fetch(f"{API}/places/{place_id}", key, DETAIL_FIELDS)
+def details(place_id, api, fetch=request):
+    return fetch(f"{api[0]}/places/{place_id}", api[1], DETAIL_FIELDS)
 
 
 # ── pure ──
@@ -198,9 +208,10 @@ def markdown(s, query):
 # ── the command ──
 
 def run(args):
-    key = api_key()
+    key = access()
     if not key:
-        print(json.dumps({"ok": False, "error": "GOOGLE_PLACES_API_KEY is not set"}))
+        print(json.dumps({"ok": False, "error": "no Google Places access: set GOOGLE_PLACES_API_KEY, "
+                                                "or grant the Google Places Connection to this app"}))
         return 2
     place_id = args.place_id
     query = args.query or place_id

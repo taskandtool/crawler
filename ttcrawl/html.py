@@ -171,7 +171,7 @@ class PageParser(HTMLParser):
                     and not (width and width < MIN_BLOCK_IMAGE_PX):
                 self._new_block("img", src=self._abs(src), alt=htmlmod.unescape(a.get("alt") or "").strip(),
                                 srcset=self._srcset(a.get("srcset") or a.get("data-srcset") or ""),
-                                shown=_int(a.get("data-tt-sw")))
+                                shown=_int(a.get("data-tt-sw")), row=_int(a.get("data-tt-row")))
         if a.get("data-tt-bg"):
             self._end_loose()
             self._new_block("img", src=a["data-tt-bg"], alt="", background=True)
@@ -314,7 +314,7 @@ class PageParser(HTMLParser):
                 "width": _int(a.get("width")), "height": _int(a.get("height")),
                 "landmark": self.landmark, "in_link": self._link_text is not None,
                 "link_href": self._abs(self._link_attrs.get("href", "")) if self._link_text is not None and getattr(self, "_link_attrs", None) else "",
-                "classes": sorted(self._classes(a)),
+                "classes": sorted(self._classes(a)), "row": _int(a.get("data-tt-row")),
             })
         elif tag == "form":
             self._current_form = {"action": self._abs(a.get("action") or self.base), "method": (a.get("method") or "get").lower(),

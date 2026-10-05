@@ -48,6 +48,9 @@ def guess_kind(img, logo_src=None):
         return "icon"
     if MARK_RE.search(name) or MARK_RE.search(alt) or MARK_DIR_RE.search(path):
         return "mark"
+    # one of a row of small pictures (a logo strip or carousel), in any format
+    if (img.get("row") or 0) >= 3:
+        return "mark"
     # a logo strip or carousel: short, wide, small, not a photograph's format
     if w and h and h <= 200 and 2 * h <= w <= 1000 and not jpeg:
         return "mark"
@@ -173,7 +176,7 @@ class Media:
         if it is None:
             it = self.items[key] = {"key": key, "original": original, "seen": [], "srcset": [], "file": None,
                                     "width": None, "height": None, "bytes": None, "alts": [], "pages": [],
-                                    "chrome": True, "background": False, "og": False, "kind": None, "shown": None}
+                                    "chrome": True, "background": False, "og": False, "kind": None, "shown": None, "row": None}
         if src not in it["seen"]:
             it["seen"].append(src)
         it["srcset"].extend(list(c) for c in srcset if list(c) not in it["srcset"])
@@ -197,6 +200,8 @@ class Media:
             it = self._item(b["src"], b.get("srcset") or [], b.get("alt"), bool(b.get("chrome")), bool(b.get("background")))
             if b.get("shown"):
                 it["shown"] = max(it["shown"] or 0, b["shown"])
+            if b.get("row"):
+                it["row"] = max(it["row"] or 0, b["row"])
             if not any(p["url"] == url for p in it["pages"]):
                 it["pages"].append({"url": url, "heading": heading, "beside": beside[:200]})
         for img in images:
@@ -206,6 +211,8 @@ class Media:
             it = self._item(src, img.get("srcset_w") or [], img.get("alt"), bool(img.get("landmark")))
             if it["width"] is None and img.get("width"):
                 it["width"], it["height"] = img.get("width"), img.get("height")
+            if img.get("row"):
+                it["row"] = max(it["row"] or 0, img["row"])
             if not any(p["url"] == url for p in it["pages"]):
                 it["pages"].append({"url": url, "heading": None, "beside": ""})
         if og_image and not og_image.startswith("data:"):
@@ -220,7 +227,7 @@ class Media:
         for it in self.items.values():
             kind = guess_kind({"src": it["original"], "alt": (it["alts"] or [""])[0], "width": it["width"],
                                "height": it["height"], "landmark": "header" if it["chrome"] else None,
-                               "shown": it.get("shown")})
+                               "shown": it.get("shown"), "row": it.get("row")})
             if it["key"] == logo_key:
                 kind = "logo"
             elif kind == "logo" and not (len(own) >= 3 and own in re.sub(r"[^a-z0-9]", "", urlsplit(it["original"]).path.lower())):

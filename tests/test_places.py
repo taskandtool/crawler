@@ -74,22 +74,28 @@ class PlacesTests(unittest.TestCase):
     def test_search_and_details_pass_the_field_masks(self):
         calls = []
 
-        def fetch(url, key, mask, body=None):
-            calls.append((url, key, mask, body))
+        def fetch(url, auth, mask, body=None):
+            calls.append((url, auth, mask, body))
             return ({"places": [{"id": "ChIJx"}]} if "searchText" in url else DETAILS), None
 
-        cands, err = places.search("Crimp Tech", "k", fetch=fetch)
+        cands, err = places.search("Crimp Tech", (places.API, {"X-Goog-Api-Key": "k"}), fetch=fetch)
         self.assertIsNone(err)
         self.assertEqual(cands[0]["id"], "ChIJx")
         self.assertEqual(calls[0][3]["textQuery"], "Crimp Tech")
         self.assertIn("places.id", calls[0][2])
-        d, err = places.details("ChIJx", "k", fetch=fetch)
+        d, err = places.details("ChIJx", (places.API, {"X-Goog-Api-Key": "k"}), fetch=fetch)
         self.assertEqual(d["id"], "ChIJx")
         self.assertIn("reviews", calls[1][2])
-        self.assertEqual(calls[1][1], "k")
+        self.assertEqual(calls[1][1], {"X-Goog-Api-Key": "k"})
 
     def test_no_key_is_a_clear_refusal(self):
-        self.assertEqual(places.api_key({}), "")
+        self.assertIsNone(places.access({}))
+
+    def test_a_key_of_our_own_first_then_the_gateway(self):
+        self.assertEqual(places.access({"GOOGLE_PLACES_API_KEY": "k", "PHOENIX_URL": "https://p", "MACHINE_TOKEN": "t"}),
+                         (places.API, {"X-Goog-Api-Key": "k"}))
+        self.assertEqual(places.access({"PHOENIX_URL": "https://p/", "MACHINE_TOKEN": "t"}),
+                         ("https://p/api/sprite/gateway/google-places/v1", {"Authorization": "Bearer t"}))
 
     def run_cli(self, *argv):
         out = StringIO()

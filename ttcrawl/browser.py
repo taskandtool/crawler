@@ -54,6 +54,17 @@ EXTRACT_JS = r"""
     const shown = img.getBoundingClientRect();     // the size the page shows it at
     if (shown.width > 1 && shown.height > 1) img.setAttribute("data-tt-sw", Math.round(Math.max(shown.width, shown.height)));
   }
+  // a row of logos: three or more small pictures that are most of what a
+  // container holds (a logo strip, a badge row, a carousel), whatever their format
+  const small = new Set(Array.from(document.images).filter(i => { const r = i.getBoundingClientRect();
+    return r.width > 8 && r.width <= 340 && r.height > 8 && r.height <= 140; }));
+  for (const img of small) {
+    let p = img.parentElement;
+    for (let d = 0; d < 5 && p; d++, p = p.parentElement) {
+      const imgs = Array.from(p.querySelectorAll("img")), n = imgs.filter(x => small.has(x)).length;
+      if (n >= 3 && n >= imgs.length * 0.8) { img.setAttribute("data-tt-row", n); break; }
+    }
+  }
   const all = document.body ? document.body.querySelectorAll("*") : [];
   for (let i = 0; i < all.length && i < 6000; i++) {
     const el = all[i], bg = getComputedStyle(el).backgroundImage;

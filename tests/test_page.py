@@ -159,6 +159,9 @@ class MediaTests(unittest.TestCase):
         # a gallery thumbnail stays a photograph
         self.assertEqual(guess_kind({"src": "https://a.com/uploads/job-3.jpg", "alt": "", "width": 2000, "height": 1500,
                                      "shown": 200}), "photo")
+        # a JPEG logo in a row of logos (a carousel of customers)
+        self.assertEqual(guess_kind({"src": "https://a.com/uploads/download.jpg", "alt": "", "width": 400, "height": 120,
+                                     "row": 5}), "mark")
         # an SVG partner logo, by its folder
         self.assertEqual(guess_kind({"src": "https://a.com/partners/acme.svg", "alt": ""}), "mark")
         # words that only look like badges stay photographs

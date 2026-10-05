@@ -426,6 +426,18 @@ def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], m
     return s
 
 
+def walk_down(s, timeout=45):
+    """Lazy images decode as they come into view: walk down the page once,
+    slowly enough for scroll-triggered sections (a carousel of logos lays
+    itself out), show whatever an entrance animation still hides, and wait
+    until the text stops growing."""
+    s.evaluate("(async () => { for (let y = 0; y < %s; y += 600) { scrollTo(0, y); "
+               "await new Promise(r => setTimeout(r, 150)); } scrollTo(0, 0); })()" % HEIGHT_JS,
+               await_promise=True, timeout=timeout)
+    s.evaluate(REVEAL_JS)
+    settle(s)
+
+
 def settle(s, rounds=10, pause=0.5):
     """Wait until the page's text stops growing (a script still filling it in)."""
     last = -1
@@ -443,7 +455,7 @@ def render(browser, url, styles=False, timeout=45):
     from .browser import extract_js, parse_eval
     s = open_page(browser, url, timeout=timeout)
     try:
-        settle(s)
+        walk_down(s, timeout)
         got = parse_eval(s.evaluate(extract_js(styles), timeout=timeout))
     finally:
         s.close()
@@ -465,14 +477,7 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
     s = open_page(browser, url, width=width, timeout=timeout, height=height, mobile=mobile,
                   allow_hosts=allow_hosts)
     try:
-        # Lazy images decode as they come into view: walk down the page once,
-        # slowly enough for scroll-triggered sections, then show whatever an
-        # entrance animation still hides and wait until the text stops growing.
-        s.evaluate("(async () => { for (let y = 0; y < %s; y += 600) { scrollTo(0, y); "
-                   "await new Promise(r => setTimeout(r, 150)); } scrollTo(0, 0); })()" % HEIGHT_JS,
-                   await_promise=True, timeout=timeout)
-        s.evaluate(REVEAL_JS)
-        settle(s)
+        walk_down(s, timeout)
         page_height = s.evaluate(HEIGHT_JS) or height
         plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
