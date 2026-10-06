@@ -905,7 +905,9 @@ def _start_run(args, profile, body, settings=None):
     start = net.normalize_url(args.start_url)
     root_host = urlsplit(start or "").hostname or ""
     if not start or not root_host or not net.is_public_host(root_host):
-        sys.stderr.write("refusing: start host is missing or not a public address\n")
+        command = args.command if args.command not in ("add", "import") else "site"
+        sys.stderr.write("refusing %s: the start host is missing or not a public address\n"
+                         "  Try: tt-crawl %s https://theirsite.com\n" % (args.start_url, command))
         return 2
     args.out = args.out or paths.site_dir(start, external=args.external)
     os.makedirs(args.out, exist_ok=True)

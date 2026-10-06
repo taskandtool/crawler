@@ -19,13 +19,11 @@ DOC_TYPES = ("application/pdf", "application/msword", "application/vnd.openxmlfo
 
 
 def linked_documents(inventory_path):
-    """Document URLs the crawl recorded, with the page that linked each."""
+    """Document URLs the crawl recorded, with the page that linked each.
+    Raises OSError or ValueError when the inventory cannot be read."""
     found = {}
-    try:
-        with open(inventory_path) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return found
+    with open(inventory_path) as f:
+        data = json.load(f)
     for rec in data.get("records", []):
         for d in rec.get("documents", []):
             found.setdefault(d, rec["url"])
@@ -48,11 +46,24 @@ def convert(path):
 
 def run(args):
     args.from_dir = args.from_dir or paths.the_site()
+    folders = ", ".join(paths.site_folders()) or "none"
     if not args.from_dir:
-        sys.stderr.write("docs needs --from: the crawl folder (raw/site/<host>) whose pages link the documents\n")
+        sys.stderr.write("docs: needs --from, the crawl folder whose pages link the documents\n"
+                         "  Crawl folders: %s\n  Try: tt-crawl docs --from raw/site/<host>\n" % folders)
+        return 2
+    inventory = paths.index(args.from_dir, "inventory.json")
+    if not os.path.isfile(inventory):
+        sys.stderr.write("docs: no crawl at %s (no %s)\n  Crawl folders: %s\n"
+                         "  Try: tt-crawl docs --from raw/site/<host>, or crawl first: tt-crawl site URL\n"
+                         % (args.from_dir, inventory, folders))
         return 2
     out = os.path.join(args.from_dir, paths.DOCS)
-    docs = linked_documents(paths.index(args.from_dir, "inventory.json"))
+    try:
+        docs = linked_documents(inventory)
+    except (OSError, ValueError, AttributeError, KeyError, TypeError) as e:
+        sys.stderr.write("docs: cannot read %s (%s)\n"
+                         "  Try: crawl it again: tt-crawl site URL --out %s\n" % (inventory, str(e) or type(e).__name__, args.from_dir))
+        return 2
     if not docs:
         paths.register_site(args.from_dir, {"docs_fetched": True, "docs": 0})
         print(json.dumps({"documents": 0, "note": "no documents linked from %s" % args.from_dir}))

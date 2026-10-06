@@ -1,5 +1,6 @@
 """The tt-crawl command line."""
 import argparse
+import os
 import sys
 
 from . import __version__
@@ -26,7 +27,16 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        return 130
+    except Exception as e:
+        if os.environ.get("TTCRAWL_DEBUG"):
+            raise
+        sys.stderr.write("tt-crawl %s: %s\n  Try: tt-crawl %s --help to check the arguments; "
+                         "TTCRAWL_DEBUG=1 shows where it failed\n" % (args.command, str(e) or type(e).__name__, args.command))
+        return 1
 
 
 if __name__ == "__main__":

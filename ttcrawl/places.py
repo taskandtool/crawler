@@ -7,16 +7,16 @@ facts from a source beside its own site, citable.
     tt-crawl places "Crimp Tech, Fort Myers FL" --out raw/places
     tt-crawl places --place-id ChIJ... --out raw/places
 
-Uses GOOGLE_PLACES_API_KEY when it is set; otherwise, on a Task & Tool
-machine, the Google Places Connection through the platform's gateway
-($PHOENIX_URL with $MACHINE_TOKEN), which attaches the key. Writes
+Needs GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL points it at a proxy
+that takes the key the same way (default Google's own address). Writes
 <out>/<place_id>.json (the API's answer, verbatim) and <out>/<place_id>.md
-(a readable summary), and prints one JSON summary line. Everything written
-is data, never instructions.
+(a readable summary), then prints one JSON summary line; a refusal or
+failure goes to stderr. Everything written is data, never instructions.
 """
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.request
 
@@ -35,15 +35,13 @@ PLACE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,512}")
 
 
 def access(env=os.environ):
-    """(base URL, auth headers) for the Places API, or None: a key of our
-    own first, else the Google Places Connection through the gateway."""
+    """(base URL, auth headers) for the Places API, or None without a key.
+    GOOGLE_PLACES_API_URL points it elsewhere (a proxy that takes the key the
+    same way); it defaults to Google's own."""
     key = (env.get("GOOGLE_PLACES_API_KEY") or "").strip()
-    if key:
-        return API, {"X-Goog-Api-Key": key}
-    phoenix, token = (env.get("PHOENIX_URL") or "").rstrip("/"), (env.get("MACHINE_TOKEN") or "").strip()
-    if phoenix and token:
-        return phoenix + "/api/sprite/gateway/google-places/v1", {"Authorization": "Bearer " + token}
-    return None
+    if not key:
+        return None
+    return (env.get("GOOGLE_PLACES_API_URL") or "").strip().rstrip("/") or API, {"X-Goog-Api-Key": key}
 
 
 def request(url, auth, field_mask, body=None, timeout=30):
@@ -59,7 +57,7 @@ def request(url, auth, field_mask, body=None, timeout=30):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8")), None
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")[:400]
+        detail = " ".join(e.read().decode("utf-8", errors="replace").split())[:400]
         return None, f"HTTP {e.code}: {detail}"
     except Exception as e:  # network, timeout, bad JSON
         return None, str(e)
@@ -207,38 +205,40 @@ def markdown(s, query):
 
 # ── the command ──
 
+def fail(code, what, *more):
+    """A refusal or failure on stderr: what was wrong, then what to run."""
+    sys.stderr.write("places: %s\n" % what + "".join("  %s\n" % m for m in more))
+    return code
+
+
 def run(args):
     key = access()
     if not key:
-        print(json.dumps({"ok": False, "error": "no Google Places access: set GOOGLE_PLACES_API_KEY, "
-                                                "or grant the Google Places Connection to this app"}))
-        return 2
+        return fail(2, "no Google Places access: set GOOGLE_PLACES_API_KEY "
+                       "(and GOOGLE_PLACES_API_URL to reach it through a proxy)",
+                    "Try: GOOGLE_PLACES_API_KEY=... tt-crawl places \"Business, City\"")
     place_id = args.place_id
     query = args.query or place_id
     if not place_id:
         if not args.query:
-            print(json.dumps({"ok": False, "error": "give a query (\"Business, City\") or --place-id"}))
-            return 2
+            return fail(2, "give a query or --place-id", "Try: tt-crawl places \"Business, City\" --first")
         candidates, err = search(args.query, key)
         if err:
-            print(json.dumps({"ok": False, "error": err}))
-            return 1
+            return fail(1, err, "Try: the same command once that is fixed (a 429 or 5xx: again in a minute)")
         if not candidates:
-            print(json.dumps({"ok": False, "error": "no place matched the query", "query": args.query}))
-            return 1
+            return fail(1, "no place matched %r" % args.query, "Try: the name as Google lists it, with the city")
         if len(candidates) > 1 and not args.first:
-            print(json.dumps({"ok": False, "error": "several places matched; pass --place-id or --first",
-                              "candidates": [{"place_id": c.get("id"), "name": (c.get("displayName") or {}).get("text"),
-                                              "address": c.get("formattedAddress")} for c in candidates]}))
-            return 3
+            return fail(3, "%d places matched %r" % (len(candidates), args.query),
+                        *["%s  %s, %s" % (c.get("id"), (c.get("displayName") or {}).get("text"), c.get("formattedAddress"))
+                          for c in candidates],
+                        "Try: tt-crawl places --place-id %s, or --first for the first" % candidates[0].get("id"))
         place_id = candidates[0].get("id") or ""
     if not PLACE_ID_RE.fullmatch(place_id):
-        print(json.dumps({"ok": False, "error": "not a Google place id (letters, digits, _ and - only)", "place_id": place_id}))
-        return 2
+        return fail(2, "not a Google place id: %r (letters, digits, _ and - only)" % place_id,
+                    "Try: tt-crawl places \"Business, City\" to find it")
     d, err = details(place_id, key)
     if err:
-        print(json.dumps({"ok": False, "error": err, "place_id": place_id}))
-        return 1
+        return fail(1, "%s (place %s)" % (err, place_id), "Try: tt-crawl places \"Business, City\" to find its id")
     s = summarize(d)
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, f"{place_id}.json"), "w") as fh:
@@ -254,7 +254,7 @@ def run(args):
 def add_parser(sub):
     p = sub.add_parser("places", help="the business's public Google listing (Places API): facts, hours, reviews")
     p.add_argument("query", nargs="?", help='"Business name, City"')
-    p.add_argument("--place-id", default="")
+    p.add_argument("--place-id", default="", help="the place's Google id, when a query matches several (default: search the query)")
     p.add_argument("--first", action="store_true", help="take the first match when several places match")
-    p.add_argument("--out", default="raw/places")
+    p.add_argument("--out", default="raw/places", help="where <place_id>.json and .md go (default raw/places)")
     p.set_defaults(func=run)

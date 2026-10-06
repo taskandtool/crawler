@@ -1,12 +1,12 @@
 # rebuild: bring an old site over whole
-For a migration: every page with its text verbatim, every picture in the content once at its largest, an inventory of every old URL. Survey first when the site is big.
+For a migration: every page with its text verbatim, every picture in the content once at its largest, an inventory of every old URL. A survey first says how big it is.
 
 ## Run
 ```
-tt-crawl survey https://theirsite.com            # when it may have more than 100 pages; read templates.md
-tt-crawl pages https://theirsite.com --max-pages N   # N from the survey's counts (default 1000)
+tt-crawl survey https://theirsite.com            # first, always: the size and the templates; read templates.md
+tt-crawl pages https://theirsite.com --max-pages N   # N from the survey's "discovered" count (default 1000)
 tt-crawl docs
-tt-crawl import --source wp                      # a WordPress site: every post and page through its own API
+tt-crawl import                                  # a WordPress site ("wordpress": true in raw/site/_sites.json): every post and page through its own API
 ```
 A long crawl saves its place every ten pages: if it stops, run the same command with `--resume`. Nothing is read twice and pictures already fetched are reused. `tt-crawl add URL` reads one more page.
 

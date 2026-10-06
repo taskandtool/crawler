@@ -36,12 +36,17 @@ def audit_dir(url, root="raw"):
     return os.path.join(root, "audit", host_of(url))
 
 
+def site_folders(root="raw"):
+    """The folders under raw/site that hold a crawl, to name them when one is wrong."""
+    base = os.path.join(root, "site")
+    found = [os.path.join(base, d) for d in sorted(os.listdir(base))] if os.path.isdir(base) else []
+    return [d for d in found if os.path.isfile(index(d, "inventory.json"))]
+
+
 def the_site(root="raw"):
     """The one site folder under raw/site, when there is exactly one: the
     default for the commands that read a crawl (docs, check)."""
-    base = os.path.join(root, "site")
-    found = [os.path.join(base, d) for d in sorted(os.listdir(base))] if os.path.isdir(base) else []
-    found = [d for d in found if os.path.isdir(d)]
+    found = site_folders(root)
     return found[0] if len(found) == 1 else None
 
 

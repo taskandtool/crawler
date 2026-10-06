@@ -3,12 +3,12 @@ Facts, voice and look: every page the site's own nav names, a sample of each col
 
 ## Run
 ```
-tt-crawl brand https://theirsite.com --max-pages 1   # the homepage alone, in seconds
-tt-crawl brand https://theirsite.com --resume        # later: the rest, without reading the homepage again
 tt-crawl brand https://theirsite.com
 tt-crawl docs                                  # price lists, brochures, menus the pages link to
-tt-crawl places "Business name, City" --out raw/places   # when GOOGLE_PLACES_API_KEY is set
+tt-crawl places "Business name, City" --out raw/places   # a business people find on Google Maps: a shop, a trade, an office
 ```
+For a first answer in seconds, `--max-pages 1` reads the homepage alone; the same command with `--resume` reads the rest later without reading it again.
+
 `brand` is `site` with the brand's pictures (`--images brand`), `--styles`, `--screenshots` of the first five pages read (`--screenshot-pages`), and each collection sampled: every page the header links to is read; a blog or a shop gives two of each kind, six per section. Run the same command again later to refresh: pages are rewritten in place, and `_index/manifest.json` marks each one new, changed or the same.
 
 ## Read, in this order

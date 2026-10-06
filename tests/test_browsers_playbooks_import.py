@@ -3,6 +3,8 @@ profiles, and importing a collection from a feed or a WordPress site. No
 network, no browser."""
 import json
 import os
+import re
+import shlex
 import sys
 import tempfile
 import unittest
@@ -97,11 +99,34 @@ class PlaybookTests(unittest.TestCase):
             self.assertIn("tt-crawl ", text, n)
             self.assertTrue(playbooks.summary(n), n)
 
-    def test_every_command_a_playbook_names_exists(self):
-        commands = set(cli.build_parser()._subparsers._group_actions[0].choices)
-        for n in playbooks.names():
-            for cmd in __import__("re").findall(r"^tt-crawl ([a-z-]+)", playbooks.read(n), __import__("re").M):
-                self.assertIn(cmd, commands, "%s names tt-crawl %s" % (n, cmd))
+    FILL = {"URL": "https://example.com/", "NEW_URL": "https://example.com/", "<url>": "https://example.com/",
+            "N": "10", "<t>": "post", "NAME": "brand", "IMAGES…": "a.png"}
+
+    def commands_in(self, text):
+        """Each `tt-crawl ...` line of a code block (its comment or description
+        cut) and each inline one, with its placeholders filled."""
+        found = [re.split(r"\s+#|\s{2,}", line)[0] for line in re.findall(r"^tt-crawl [^\n]*", text, re.M)]
+        found += re.findall(r"`(tt-crawl [^`]*)`", text)
+        for line in found:
+            words = shlex.split(line.replace("[", "").replace("]", ""))[1:]
+            words = [self.FILL.get(w, w.replace("<host>", "example.com")) for w in words if w not in ("...", "…")]
+            if words and not words[0].startswith("-"):
+                yield line, words
+
+    def test_every_command_a_playbook_or_the_readme_names_parses(self):
+        readme = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md")
+        docs = {n: playbooks.read(n) for n in playbooks.names()}
+        with open(readme) as f:
+            docs["README.md"] = f.read()
+        for name, text in docs.items():
+            lines = list(self.commands_in(text))
+            self.assertTrue(lines, name)
+            for line, words in lines:
+                try:
+                    with redirect_stderr(StringIO()):
+                        cli.build_parser().parse_args(words)
+                except SystemExit:
+                    self.fail("%s: %r does not parse" % (name, line))
 
     def test_profiles_carry_their_defaults(self):
         p = cli.build_parser()

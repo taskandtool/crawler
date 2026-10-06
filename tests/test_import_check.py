@@ -11,7 +11,7 @@ from io import StringIO
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fixtures import WP_HTML  # noqa: E402
-from ttcrawl import check, cli, importer, net  # noqa: E402
+from ttcrawl import check, cli, importer, net, site  # noqa: E402
 
 
 def _resp(status, body=b"", headers=None, final=None, chain=None):
@@ -132,6 +132,99 @@ class CheckTests(unittest.TestCase):
         self.assertTrue(md.splitlines()[6].startswith("| https://old.com/b | missing"))
         self.assertIn("missing from the sitemap: /a", md)
         self.assertIn("LocalBusiness", md)
+
+
+class RefusalTests(unittest.TestCase):
+    """Wrong input says what was wrong and what works, on stderr, never exit 0."""
+
+    def run_in(self, root, *argv):
+        out, err, cwd = StringIO(), StringIO(), os.getcwd()
+        os.chdir(root)
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                code = cli.main(list(argv))
+        finally:
+            os.chdir(cwd)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_docs_from_a_folder_no_crawl_wrote(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "raw", "site", "acme.com", "_index"))
+            with open(os.path.join(root, "raw", "site", "acme.com", "_index", "inventory.json"), "w") as f:
+                f.write('{"records": []}')
+            code, out, err = self.run_in(root, "docs", "--from", "raw/site/acme.co")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("docs: no crawl at raw/site/acme.co", err)
+            self.assertIn("raw/site/acme.com", err)                   # the folders that do exist
+            self.assertIn("Try:", err)
+            self.assertFalse(os.path.exists(os.path.join(root, "raw", "site", "_sites.json")))   # nothing registered
+
+    def test_docs_names_only_folders_that_hold_a_crawl(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "raw", "site", "x.com"))
+            code, out, err = self.run_in(root, "docs", "--from", "raw/site/x.com")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("Crawl folders: none", err)
+
+    def test_docs_refuses_an_unreadable_inventory(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "raw", "site", "acme.com", "_index"))
+            with open(os.path.join(root, "raw", "site", "acme.com", "_index", "inventory.json"), "w") as f:
+                f.write("{not json")
+            code, out, err = self.run_in(root, "docs", "--from", "raw/site/acme.com")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("docs: cannot read raw/site/acme.com/_index/inventory.json", err)
+            self.assertIn("Try:", err)
+
+    def test_a_refused_start_names_the_command_that_was_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, out, err = self.run_in(root, "brand", "http://10.0.0.5/")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("Try: tt-crawl brand https://theirsite.com", err)
+
+    def test_check_names_the_inventory_it_could_not_find(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, out, err = self.run_in(root, "check", "http://localhost:3000", "--inventory", "/nonexistent.json")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("no inventory at /nonexistent.json", err)
+            self.assertIn("Try:", err)
+
+    def test_audit_refusals_are_on_stderr(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, out, err = self.run_in(root, "audit", "http://10.0.0.5/")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("neither a public", err)
+            code, out, err = self.run_in(root, "audit", "http://localhost:3000", "--inventory", "/nonexistent.json")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("no inventory at /nonexistent.json", err)
+
+    def test_an_unexpected_failure_is_one_line_not_a_traceback(self):
+        saved = site.run
+
+        def fails(args):
+            raise PermissionError(13, "Permission denied", "/read-only/acme.com")
+        try:
+            site.run = fails
+            with tempfile.TemporaryDirectory() as root:
+                code, out, err = self.run_in(root, "site", "https://acme.com/")
+        finally:
+            site.run = saved
+        self.assertEqual(code, 1)
+        self.assertTrue(err.startswith("tt-crawl site: [Errno 13] Permission denied: '/read-only/acme.com'"), err)
+        self.assertIn("Try: tt-crawl site --help", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_an_interrupt_exits_130_quietly(self):
+        saved = site.run
+
+        def interrupted(args):
+            raise KeyboardInterrupt
+        try:
+            site.run = interrupted
+            with tempfile.TemporaryDirectory() as root:
+                self.assertEqual(self.run_in(root, "site", "https://acme.com/"), (130, "", ""))
+        finally:
+            site.run = saved
 
 
 if __name__ == "__main__":

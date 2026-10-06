@@ -36,7 +36,8 @@ tt-crawl import            with no --template: every post and page of a WordPres
                            --template T: that one collection, from the site's own feed or HTML
 tt-crawl docs              the documents the crawled pages link to, as markdown
 tt-crawl places "Name, City" --out raw/places
-                           the business's public Google listing (a GOOGLE_PLACES_API_KEY, or the Google Places Connection)
+                           the business's public Google listing (GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL for a proxy)
+tt-crawl shoot URL         one page's screenshots at desktop and phone width, whole or first screen (localhost too)
 tt-crawl sheet IMAGES…     several pictures as one numbered contact sheet, to name a site's logos in one look
 tt-crawl check NEW_URL     the launch check: every old URL requested on the new site
 tt-crawl audit URL         a live site's health: broken links, SEO basics, accessibility, sitemap drift
@@ -47,8 +48,9 @@ tt-crawl setup             after pip install: the launcher and both browsers
 The five crawls (`site`, `brand`, `survey`, `pages`, `reference`) share their flags:
 `--out DIR`, `--external` (someone else's site, into `raw/external/<host>`),
 `--max-pages N`, `--images none|brand|content|all`, `--delay S`,
-`--browser chrome|obscura`, `--static` (no browser at all, so no screenshots
-or styles either), `--screenshots`, `--styles`,
+`--parallel N` (pages read at once), `--browser chrome|obscura`, `--static`
+(no browser at all, so no screenshots or styles either), `--screenshots`,
+`--screenshot-pages N` (how many pages get them), `--styles`,
 `--style-pages N`, and `--resume` to carry on an interrupted crawl. `add`
 and `import` take `--out`, `--images`, `--browser` and `--static`; their
 pictures default to what the folder's crawl chose. `check` and `audit` take
@@ -56,8 +58,22 @@ a public URL or the site running on this machine (`http://localhost:PORT`).
 
 Each playbook is the recipe for one job: the commands in order, what to
 read after, what to tell the owner. They ship with the crawler, so the flags
-in them always match it. Every command but `playbook` ends with one JSON
-summary line; `check` and `audit` exit 1 when something needs fixing.
+in them always match it.
+
+## Output and exit codes
+
+- The crawls, `add`, `import`, `docs`, `places`, `check`, `audit` and
+  `setup` print one JSON summary line on stdout; progress goes to stderr.
+- `shoot` and `sheet` print a short text summary ending in `Next:`; `--json`
+  prints their result as JSON instead (for `shoot`, also when a width
+  failed). `playbook` prints the playbook.
+- A refusal or failure goes to stderr and says what was wrong, most with a
+  `Try:` line naming a command that works; stdout stays empty.
+- Exit 0 done; 1 failed, or something needs fixing (`check`, `audit`,
+  `setup` without a browser); 2 refused or misused (a bad URL, a missing
+  folder or inventory); 3 `places` matched several (each named on stderr);
+  130 interrupted. `TTCRAWL_DEBUG=1` shows the traceback of an unexpected
+  failure.
 
 ## What a crawl writes
 
@@ -136,5 +152,5 @@ pip install -e .
 python3 -m unittest discover -s tests      # no network, no browser needed
 ```
 
-The tests run on fixture HTML and fake responses. `CLAUDE.md` has the
+The tests run on fixture HTML and fake responses. `AGENTS.md` has the
 conventions.

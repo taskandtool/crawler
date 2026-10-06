@@ -3,7 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest import mock
 
@@ -91,36 +91,55 @@ class PlacesTests(unittest.TestCase):
     def test_no_key_is_a_clear_refusal(self):
         self.assertIsNone(places.access({}))
 
-    def test_a_key_of_our_own_first_then_the_gateway(self):
-        self.assertEqual(places.access({"GOOGLE_PLACES_API_KEY": "k", "PHOENIX_URL": "https://p", "MACHINE_TOKEN": "t"}),
-                         (places.API, {"X-Goog-Api-Key": "k"}))
-        self.assertEqual(places.access({"PHOENIX_URL": "https://p/", "MACHINE_TOKEN": "t"}),
-                         ("https://p/api/sprite/gateway/google-places/v1", {"Authorization": "Bearer t"}))
+    def test_a_key_reaches_google_or_the_proxy_it_is_pointed_at(self):
+        self.assertEqual(places.access({"GOOGLE_PLACES_API_KEY": "k"}), (places.API, {"X-Goog-Api-Key": "k"}))
+        self.assertEqual(places.access({"GOOGLE_PLACES_API_KEY": "k", "GOOGLE_PLACES_API_URL": "https://proxy/v1/"}),
+                         ("https://proxy/v1", {"X-Goog-Api-Key": "k"}))
+        self.assertIsNone(places.access({"GOOGLE_PLACES_API_URL": "https://proxy/v1"}), "a URL without a key is no access")
 
-    def run_cli(self, *argv):
-        out = StringIO()
-        with redirect_stdout(out), mock.patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "k"}):
+    def run_cli(self, *argv, env=None):
+        out, err = StringIO(), StringIO()
+        with redirect_stdout(out), redirect_stderr(err), mock.patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "k"} if env is None else env, clear=env is not None):
             args = cli.build_parser().parse_args(["places", *argv])
             code = args.func(args)
-        return code, out.getvalue()
+        return code, out.getvalue(), err.getvalue()
 
     def test_a_place_id_never_names_a_file_it_is_not(self):
         with tempfile.TemporaryDirectory() as out, mock.patch.object(places, "details") as details:
-            code, printed = self.run_cli("--place-id", "../../evil", "--out", out)
+            code, printed, err = self.run_cli("--place-id", "../../evil", "--out", out)
             self.assertEqual(code, 2)
             self.assertEqual(self.run_cli("--place-id", "ChIJx\n", "--out", out)[0], 2)   # not even a trailing newline
-            self.assertFalse(json.loads(printed)["ok"])
+            self.assertEqual(printed, "")
+            self.assertIn("not a Google place id", err)
+            self.assertIn("Try:", err)
             details.assert_not_called()
             self.assertEqual(os.listdir(out), [])
 
-    def test_several_matches_are_one_summary_line(self):
+    def test_several_matches_are_named_on_stderr(self):
         two = [{"id": "ChIJa", "displayName": {"text": "A"}}, {"id": "ChIJb", "displayName": {"text": "B"}}]
         with mock.patch.object(places, "search", return_value=(two, None)):
-            code, printed = self.run_cli("Crimp Tech, Fort Myers")
+            code, printed, err = self.run_cli("Crimp Tech, Fort Myers")
         self.assertEqual(code, 3)
-        self.assertEqual(len(printed.strip().splitlines()), 1)
-        self.assertEqual([c["place_id"] for c in json.loads(printed)["candidates"]], ["ChIJa", "ChIJb"])
+        self.assertEqual(printed, "")
+        self.assertIn("ChIJa", err)
+        self.assertIn("ChIJb", err)
+        self.assertIn("Try: tt-crawl places --place-id ChIJa", err)
 
+    def test_no_access_and_a_failed_call_are_refusals_on_stderr(self):
+        code, printed, err = self.run_cli("Crimp Tech", env={})
+        self.assertEqual((code, printed), (2, ""))
+        self.assertIn("no Google Places access", err)
+        with mock.patch.object(places, "search", return_value=([], "HTTP 403: denied")):
+            code, printed, err = self.run_cli("Crimp Tech")
+        self.assertEqual((code, printed), (1, ""))
+        self.assertIn("HTTP 403", err)
+
+    def test_a_listing_is_one_json_line(self):
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(places, "details", return_value=(DETAILS, None)):
+            code, printed, err = self.run_cli("--place-id", "ChIJx", "--out", out)
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(printed)["place_id"], "ChIJx")
+            self.assertTrue(os.path.isfile(os.path.join(out, "ChIJx.json")))
 
 if __name__ == "__main__":
     unittest.main()

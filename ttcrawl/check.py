@@ -58,7 +58,11 @@ def run(args):
     site = paths.the_site()
     args.inventory = args.inventory or (paths.index(site, "inventory.json") if site else None)
     if not args.inventory or not os.path.isfile(args.inventory):
-        sys.stderr.write("check needs --inventory: the old site's raw/site/<host>/_index/inventory.json\n")
+        sys.stderr.write("check: %s\n  Crawl folders: %s\n"
+                         "  Try: tt-crawl check %s --inventory raw/site/<host>/_index/inventory.json\n"
+                         % ("no inventory at %s" % args.inventory if args.inventory
+                            else "needs --inventory, the old site's raw/site/<host>/_index/inventory.json",
+                            ", ".join(paths.site_folders()) or "none", args.new_base_url))
         return 2
     with open(args.inventory) as f:
         inv = json.load(f)

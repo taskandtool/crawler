@@ -26,6 +26,7 @@ owner. Static fetches: it checks the HTML the server sends.
 """
 import json
 import os
+import sys
 import time
 from collections import Counter
 from urllib.parse import urljoin, urlsplit
@@ -261,11 +262,16 @@ def markdown(report):
 
 def run(args):
     if not net.local_or_public_http_url(args.site_url):
-        print(json.dumps({"ok": False, "error": "neither a public http(s) url nor http://localhost"}))
+        sys.stderr.write("audit: %s is neither a public http(s) URL nor http://localhost\n"
+                         "  Try: tt-crawl audit https://theirsite.com, or tt-crawl audit http://localhost:3000\n" % args.site_url)
+        return 2
+    if args.inventory and not os.path.isfile(args.inventory):
+        sys.stderr.write("audit: no inventory at %s\n  Try: tt-crawl audit %s --inventory raw/site/<host>/_index/inventory.json\n"
+                         % (args.inventory, args.site_url))
         return 2
     out = os.path.join(paths.audit_dir(args.site_url), paths.today() + ".md")
     inventory = None
-    if args.inventory and os.path.isfile(args.inventory):
+    if args.inventory:
         with open(args.inventory) as fh:
             inventory = json.load(fh)
     report = audit(args.site_url, args.max_pages, check_external=not args.no_external, inventory=inventory)
@@ -287,7 +293,7 @@ def run(args):
 def add_parser(sub):
     p = sub.add_parser("audit", help="the weekly health check of a live site: broken links, SEO basics, sitemap drift")
     p.add_argument("site_url", help="the live site, or http://localhost:PORT; the report goes to raw/audit/<host>/<date>.md")
-    p.add_argument("--max-pages", type=int, default=200)
+    p.add_argument("--max-pages", type=int, default=200, help="pages to crawl (default 200)")
     p.add_argument("--inventory", default="", help="also check the old URLs from this inventory")
     p.add_argument("--no-external", action="store_true", help="skip the links to other sites")
     p.add_argument("--no-register", action="store_true", help="don't record it as the host's latest audit (raw/audit/_latest.json)")
