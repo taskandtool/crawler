@@ -18,14 +18,16 @@ Keep it that way. Every behaviour change comes with a test.
 - Standard library first. The only dependency is markitdown (documents).
   A request to a site goes through `net.fetch`/`net.fetch_bytes`, which
   carry the SSRF guard, the retries and the user agent.
-- Output: the crawls, `add`, `import`, `docs`, `places`, `check`, `audit`
-  and `setup` print one JSON summary line (stdout); `shoot` and `sheet`
-  print a text summary ending in `Next:`, or JSON with `--json`; `playbook`
-  prints the playbook. Progress, refusals and failures go to stderr, saying
-  what was wrong and a `Try:` command; a refusal prints nothing on stdout.
-  `cli.main` turns an unexpected exception into that one line (exit 1;
-  `TTCRAWL_DEBUG=1` re-raises). README.md "Output and exit codes" says the
-  same for users; change both together.
+- Output goes through `say.py`, never a hand-rolled print: `say.command`
+  makes a subcommand (description, output epilog, `--json`), `say.done`
+  prints the result (text by default, ending in `Next:`; one JSON line with
+  `--json`), `say.fail` a refusal on stderr ending in `Try:` (JSON under
+  `--json`); a refusal prints nothing on stdout. Validate an argument with
+  an argparse `type=`, so misuse exits 2 before any network or browser.
+  `cli.main` turns an unexpected exception into one refusal (exit 1;
+  `TTCRAWL_DEBUG=1` re-raises). `tests/test_cli_contract.py` holds every
+  command to this. README.md "Output and exit codes" says the same for
+  users; change both together.
 - Exit 0 done; 1 failed, or something needs fixing (check, audit, setup);
   2 refused or misused; 3 places matched several; 130 interrupted. Wrong
   input (a missing folder, file or id) is never 0.

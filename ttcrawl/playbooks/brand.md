@@ -19,4 +19,4 @@ For a first answer in seconds, `--max-pages 1` reads the homepage alone; the sam
 5. `_index/styles.json`, `_index/media.json` and `shots/`: colours, fonts, the logo, the photographs and what each sat beside.
 
 ## Tell the owner
-Pages read and found, whether the limit was hit (`limit_reached`), pictures, reviews, any fact with two values, and what the site does not say. A missing fact stays missing, never a guess.
+Pages read and found, whether the limit was hit, pictures, reviews, any fact with two values, and what the site does not say. A missing fact stays missing, never a guess.

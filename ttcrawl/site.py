@@ -36,6 +36,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
 from . import __version__, chrome, dom, inventory, net, paths, structured
+from .say import command as say_command, count, done, fail
 from .blocks import fingerprint, to_markdown
 from .facts import Facts, jsonld_reviews, reviews as page_reviews
 from .furniture import page_furniture, site_furniture
@@ -696,10 +697,80 @@ class Crawl:
                    "styles_pages": (styles or {}).get("pages_read", 0), "out": out}
         if self.browser_note:
             summary["browser_note"] = self.browser_note
+        if getattr(self, "import_stats", None):
+            summary["import"] = self.import_stats
         if args.styles and not self.style_readings:
             summary["styles_skipped"] = "no page rendered in the browser"
-        print(json.dumps(summary))
+        self.written = set(written)
+        done(args, summary, *self.report(summary, skipped_by))
         return 0
+
+    def report(self, s, skipped_by):
+        """The summary as text: (what happened, lines, next)."""
+        args, out, host = self.args, s["out"], paths.host_of(self.start)
+        same = s["pages"] - s["new"] - s["changed"]
+        changes = ", ".join("%d %s" % (n, w) for n, w in ((s["new"], "new"), (s["changed"], "changed"), (same, "unchanged")) if n)
+        limit = ", limit %s reached" % s["limit"] if s["limit_reached"] else ""
+        if args.command == "add":
+            read = [u for u in self.asked if u in self.written]
+            what = "%d of %s read into %s" % (len(read), count(len(args.urls), "page"), out)
+        elif args.command == "import":
+            st = self.import_stats
+            what = "%s into %s, %s (%s)" % (st["template"] or "wordpress posts and pages", out, count(st["items"], "page"),
+                                            ", ".join("%s %d" % kv for kv in st["by_source"].items()) or "none read")
+        else:
+            what = "%s, %s read (%s)%s" % (host, count(s["pages"], "page"), changes or "none", limit)
+        lines = []
+        if args.command in ("add", "import"):
+            lines.append("%s in the folder (%s)%s" % (count(s["pages"], "page"), changes or "none", limit))
+        lines.append("%s/pages/: the pages; %s/_index/: inventory, templates, facts, media, manifest" % (out, out))
+        lines.append("%s found on the site, %d not read%s" % (
+            count(s["discovered"], "URL"), s["unread"],
+            "; --resume with a higher --max-pages reads on" if s["limit_reached"] else ""))
+        lines.append("%s of page (%s): %s/_index/templates.md" % (count(s["templates"], "kind"), count(s["collections"], "collection"), out))
+        pictures = "%s in %s/images/ (%d seen)" % (count(s["images"], "picture"), out, s["images_seen"])
+        if s["screenshots"]:
+            pictures += "; %s screenshot in %s/shots/" % (count(s["screenshots"], "page"), out)
+        if s["styles_pages"]:
+            pictures += "; styles from %s in %s/_index/styles.json" % (count(s["styles_pages"], "page"), out)
+        lines.append(pictures)
+        facts = ", ".join(count(n, k) for k, n in s["facts"].items() if n)
+        lines.append("facts: %s; %s; %s (%s/_index/facts.json)" % (
+            facts or "none found", count(s["reviews"], "review"),
+            "business markup found" if s["business_markup"] else "no business markup", out))
+        if s["documents"]:
+            lines.append("%s linked from the pages (tt-crawl docs fetches them)" % count(s["documents"], "document"))
+        left = []
+        if args.command == "add":
+            left += ["%s (%s)" % (u, self.record(u)["reason"] or "not read") for u in self.asked if u not in self.written]
+            left += ["%s (not on %s)" % (u, self.root_host) for u in self.not_on_site]
+        if s["earlier_kept"]:
+            left.append("%s an earlier run wrote, kept" % count(s["earlier_kept"], "page"))
+        if skipped_by:
+            left.append("%s skipped in all (%s)" % (count(s["skipped"], "URL"), ", ".join("%s %d" % kv for kv in sorted(skipped_by.items()))))
+        if s["thin"]:
+            left.append("%s with little text, kept and marked thin" % count(s["thin"], "page"))
+        if left:
+            lines.append("left alone: " + "; ".join(left))
+        lines.append("%s%s%s" % (
+            "rendered by %s (%d of %d pages)" % (s["renderer"], s["rendered"], s["pages"]) if s["renderer"] else "read without a browser",
+            "; " + s["browser_note"] if s.get("browser_note") else "",
+            "; the site throttled us %s" % count(s["throttled"], "time") if s["throttled"] else ""))
+        if not s["pages"]:
+            nxt = "curl -sI %s, to see whether the site answers this machine (a crawl reads nothing it refuses)" % self.start
+        elif args.command == "add":
+            nxt = "read the new pages in %s/pages/ (their file names are in %s/_index/manifest.json)" % (out, out)
+        elif args.command == "import":
+            nxt = "read the imported pages in %s/pages/ (each says where it came from in its frontmatter)" % out
+        elif self.profile == "survey":
+            nxt = "read %s/_index/templates.md, then ask which collections to bring over (tt-crawl playbook survey)" % out
+        elif self.profile == "reference":
+            nxt = "look at %s/shots/ and %s/_index/styles.json for the look; never their words or pictures" % (out, out)
+        elif s["documents"]:
+            nxt = "tt-crawl docs --from %s, for the documents the pages link to" % out
+        else:
+            nxt = "read %s/_index/facts.json, then the pages" % out
+        return what, lines, nxt
 
     def fetch_images(self, media):
         """Each chosen picture once, at its largest: the original first, then
@@ -881,19 +952,24 @@ def folder_settings(state):
     return state["profile"], {"images": s["images"], "limit": s.get("limit")}
 
 
-def into_folder(args, command):
+def into_folder(args):
     """For `add` and `import`: the folder a crawl wrote (--out, else the one
     raw/site/<host>), its saved state, and the settings it keeps; or None
     after saying why."""
+    given = args.out
     args.out = args.out or paths.the_site()
     state = saved_state(args.out) if args.out else None
+    try_cmd = "tt-crawl %s %s--out raw/site/<host>" % (args.command, "URL " if args.command == "add" else "")
+    folders = "Crawl folders: %s" % (", ".join(paths.site_folders()) or "none")
     if not state:
-        sys.stderr.write("%s needs --out: a folder a crawl wrote (it reads %s/crawl.json)\n" % (command, paths.CACHE))
+        fail(args, 2, "no crawl at %s (no %s/crawl.json)" % (given, paths.CACHE) if given
+             else "needs --out, the folder a crawl wrote", try_cmd, folders)
         return None
     args.start_url = state["start"]
     kept = folder_settings(state)
     if not kept:
-        sys.stderr.write("%s has no recorded crawl settings; crawl it again\n" % args.out)
+        fail(args, 2, "%s has no recorded crawl settings" % args.out,
+             "tt-crawl site %s --out %s, to crawl it again" % (state["start"], args.out))
         return None
     profile, settings = kept
     args.images = args.images or settings["images"]
@@ -906,9 +982,8 @@ def _start_run(args, profile, body, settings=None):
     root_host = urlsplit(start or "").hostname or ""
     if not start or not root_host or not net.is_public_host(root_host):
         command = args.command if args.command not in ("add", "import") else "site"
-        sys.stderr.write("refusing %s: the start host is missing or not a public address\n"
-                         "  Try: tt-crawl %s https://theirsite.com\n" % (args.start_url, command))
-        return 2
+        return fail(args, 2, "%s: the start host is missing or not a public address" % args.start_url,
+                    "tt-crawl %s https://theirsite.com" % command)
     args.out = args.out or paths.site_dir(start, external=args.external)
     os.makedirs(args.out, exist_ok=True)
     crawl = Crawl(args, start, profile, settings)
@@ -949,7 +1024,7 @@ def run(args):
 
 
 def run_add(args):
-    found = into_folder(args, "add")
+    found = into_folder(args)
     if not found:
         return 2
     profile, settings = found
@@ -957,11 +1032,13 @@ def run_add(args):
     def body(crawl):
         crawl.load_state()
         crawl.robots, _ = load_robots(crawl.start)
+        crawl.asked, crawl.not_on_site = [], []
         for i, raw in enumerate(args.urls):
             url = net.normalize_url(urljoin(crawl.start, raw))
             if not url or not net.same_site(url, crawl.root_host):
-                sys.stderr.write("skipping %s: not on %s\n" % (raw, crawl.root_host))
+                crawl.not_on_site.append(raw)
                 continue
+            crawl.asked.append(url)
             crawl.seen.add(url)
             rec = crawl.record(url)
             crawl.templates.add(url)
@@ -993,7 +1070,7 @@ def _read_args(p):
 
 
 def _crawl_args(p, max_pages, images):
-    p.add_argument("start_url")
+    p.add_argument("start_url", help="the site's address, e.g. https://theirsite.com (a bare host is not enough)")
     p.add_argument("--out", default=None, help="the site's folder (default raw/site/<host>, or raw/external/<host> with --external)")
     p.add_argument("--external", action="store_true", help="someone else's site: raw/external/<host> by default")
     p.add_argument("--max-pages", type=int, default=max_pages,
@@ -1019,30 +1096,38 @@ def folder_args(p):
                    per_template=None, per_section=None)
 
 
+CRAWL_OUTPUT = ("Prints the site and how many pages were read (new, changed, unchanged), where the files went, "
+                "what was found and what was left alone, then Next:. A refusal goes to stderr with a Try: line.")
+
+
 def add_parser(sub):
-    p = sub.add_parser("site", help="read a site into raw/site/<host>: pages, pictures, inventory, templates, facts")
+    p = say_command(sub, "site", "read a site into raw/site/<host>: pages, pictures, inventory, templates, facts", CRAWL_OUTPUT)
     _crawl_args(p, DEFAULT_MAX_PAGES, "content")
     p.set_defaults(func=run, profile="site", per_template=None, per_section=None)
 
-    p = sub.add_parser("survey", help="sample a big site: every URL listed by template, two of each read, no pictures fetched")
+    p = say_command(sub, "survey", "sample a big site: every URL listed by template, two of each read, no pictures fetched",
+                    CRAWL_OUTPUT)
     _crawl_args(p, DEFAULT_MAX_PAGES, "none")
     p.set_defaults(func=run, profile="survey", per_template=2, per_section=6)
 
-    p = sub.add_parser("brand", help="a business's own site for its facts, voice and look (tt-crawl playbook brand)")
+    p = say_command(sub, "brand", "a business's own site for its facts, voice and look (tt-crawl playbook brand)", CRAWL_OUTPUT)
     _crawl_args(p, DEFAULT_MAX_PAGES, "brand")
     p.set_defaults(func=run, profile="brand", per_template=2, per_section=6, styles=True, screenshots=True,
                    screenshot_pages=BRAND_SHOT_PAGES)
 
-    p = sub.add_parser("pages", help="a whole site for a rebuild: every page and picture (tt-crawl playbook rebuild)")
+    p = say_command(sub, "pages", "a whole site for a rebuild: every page and picture (tt-crawl playbook rebuild)", CRAWL_OUTPUT)
     _crawl_args(p, 1000, "content")
     p.set_defaults(func=run, profile="pages", per_template=None, per_section=None)
 
-    p = sub.add_parser("reference", help="a site the owner admires: a few pages' look and structure (tt-crawl playbook reference)")
+    p = say_command(sub, "reference", "a site the owner admires: a few pages' look and structure (tt-crawl playbook reference)",
+                    CRAWL_OUTPUT)
     _crawl_args(p, 8, "none")
     p.set_defaults(func=run, profile="reference", per_template=1, per_section=3,
                    external=True, styles=True, screenshots=True)
 
-    p = sub.add_parser("add", help="read more pages into a folder a crawl already wrote, and write it again")
-    p.add_argument("urls", nargs="+", metavar="URL")
+    p = say_command(sub, "add", "read more pages into a folder a crawl already wrote, and write it again",
+                    "Prints how many of the pages were read into which folder, the folder's totals, and any page "
+                    "left alone and why, then Next:. A refusal goes to stderr with a Try: line.")
+    p.add_argument("urls", nargs="+", metavar="URL", help="a page of the crawled site, full or a path (/about)")
     folder_args(p)
     p.set_defaults(func=run_add)

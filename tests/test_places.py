@@ -134,12 +134,22 @@ class PlacesTests(unittest.TestCase):
         self.assertEqual((code, printed), (1, ""))
         self.assertIn("HTTP 403", err)
 
-    def test_a_listing_is_one_json_line(self):
+    def test_a_listing_says_what_it_found_and_where_or_one_json_line(self):
         with tempfile.TemporaryDirectory() as out, mock.patch.object(places, "details", return_value=(DETAILS, None)):
             code, printed, err = self.run_cli("--place-id", "ChIJx", "--out", out)
             self.assertEqual(code, 0)
+            self.assertTrue(printed.startswith("tt-crawl places: "), printed)
+            self.assertIn("(ChIJx)", printed.splitlines()[0])
+            self.assertIn(os.path.join(out, "ChIJx") + ".json", printed)
+            self.assertIn("\nNext: ", printed)
+            code, printed, err = self.run_cli("--place-id", "ChIJx", "--out", out, "--json")
             self.assertEqual(json.loads(printed)["place_id"], "ChIJx")
             self.assertTrue(os.path.isfile(os.path.join(out, "ChIJx.json")))
+
+    def test_a_refusal_under_json_is_json_on_stderr(self):
+        code, printed, err = self.run_cli("Crimp Tech", "--json", env={})
+        self.assertEqual((code, printed), (2, ""))
+        self.assertIn("GOOGLE_PLACES_API_KEY", json.loads(err)["try"])
 
 if __name__ == "__main__":
     unittest.main()

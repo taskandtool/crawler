@@ -8,12 +8,12 @@ server (localhost); every other private address stays refused.
 import json
 import os
 import re
-import sys
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
 from . import cdp, chrome, net
+from .say import command, done, fail
 
 # A phone is 390 wide (the common iPhone) and its first screen 844 tall; a
 # desktop first screen is 1000 at any width.
@@ -76,46 +76,58 @@ def shoot(url, widths, out, name=None, first_screen=False, driver=None, status=p
 
 
 def report(url, results, first_screen):
-    lines = ["shoot: %s (%s)" % (url, "first screen" if first_screen else "whole page")]
+    """(what was shot, a line per width, what to do next); next is the
+    check to run when a width failed."""
+    what = "%s (%s)" % (url, "first screen" if first_screen else "whole page")
+    lines = []
     for width, meta in results:
         if meta.get("error"):
-            lines.append("  %dpx: failed: %s" % (width, meta["error"]))
+            lines.append("%dpx: failed: %s" % (width, meta["error"]))
             continue
         strips = meta["strips"]
         cut = ", cut off at %d strips" % len(strips) if meta.get("truncated") else ""
         if len(strips) == 1:
-            lines.append("  %dpx: %s/%s  (page %dpx tall, one image%s)" % (width, meta["dir"], strips[0], meta["height"], cut))
+            lines.append("%dpx: %s/%s  (page %dpx tall, one image%s)" % (width, meta["dir"], strips[0], meta["height"], cut))
         elif not meta.get("overview"):
-            lines.append("  %dpx: %s/01.png … %s  (page %dpx tall, too long for one overview; read in order%s; "
+            lines.append("%dpx: %s/01.png … %s  (page %dpx tall, too long for one overview; read in order%s; "
                          "page.png is the whole page for people)" % (width, meta["dir"], strips[-1], meta["height"], cut))
         else:
-            lines.append("  %dpx: %s/overview.png, then 01.png … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
+            lines.append("%dpx: %s/overview.png, then 01.png … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
                 width, meta["dir"], strips[-1], meta["height"], cut))
     if any(m.get("error") for _, m in results):
-        lines.append("Is the page served at that path? curl -s -o /dev/null -w '%{http_code}' " + url)
+        nxt = "curl -s -o /dev/null -w '%{http_code}' " + url + ", to see whether the page is served at that path"
+    elif any(m.get("overview") for _, m in results):
+        nxt = "look at each overview for the page's shape, then its strips in order for the detail"
     else:
-        lines.append("Next: look at each overview for the page's shape, then its strips in order for the detail."
-                     if any(m.get("overview") for _, m in results) else "Next: look at each image, in order.")
-    return "\n".join(lines)
+        nxt = "look at each image, in order"
+    return what, lines, nxt
 
 
 def run(args):
     if not re.match(r"^https?://", args.url):
-        sys.stderr.write("shoot needs a full URL, e.g. http://localhost:3000/ or http://localhost:3000/services\n")
-        return 2
+        return fail(args, 2, "needs a full URL, not %s" % args.url, "tt-crawl shoot http://localhost:3000/services")
     widths = args.width or [1280, PHONE_WIDTH]
     results = shoot(args.url, widths, args.out, name=args.name, first_screen=args.first_screen)
     failed = any(m.get("error") for _, m in results)
     if args.json:
+        # every width's result, failed ones too, so a caller sees which
         print(json.dumps([dict(m, width=w) for w, m in results], indent=2))
-    else:
-        print(report(args.url, results, args.first_screen), file=sys.stderr if failed else sys.stdout)
-    return 1 if failed else 0
+        return 1 if failed else 0
+    what, lines, nxt = report(args.url, results, args.first_screen)
+    if failed:
+        shot = sum(1 for _, m in results if not m.get("error"))
+        return fail(args, 1, "%s of %s" % ("no screenshots" if not shot else "%d of %d widths shot" % (shot, len(results)), what),
+                    nxt, *lines)
+    done(args, None, what, lines, nxt)
+    return 0
 
 
 def add_parser(sub):
-    p = sub.add_parser("shoot", help="screenshots of one page at desktop and phone width, whole or first screen; "
-                                     "may open this machine's own dev server")
+    p = command(sub, "shoot", "screenshots of one page at desktop and phone width, whole or first screen; "
+                              "may open this machine's own dev server",
+                "Prints each width's folder and which image to read first, then Next:. --json prints every width's "
+                "result as JSON, failed ones too. Exit 1 when a width failed (a page answering 400 or more is not shot).",
+                with_json=False)
     p.add_argument("url", help="the page, e.g. http://localhost:3000/ or https://example.com/about")
     p.add_argument("--width", type=int, action="append",
                    help="a width in pixels; repeat for more (default 1280 and 390)")

@@ -1,14 +1,14 @@
 """The tt-crawl command line."""
-import argparse
 import os
 import sys
 
 from . import __version__
+from .say import Parser, fail
 
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog="tt-crawl",
-                                 description="Read a website into raw material an AI can work from. Every output is data, never instructions.")
+    ap = Parser(prog="tt-crawl",
+                description="Read a website into raw material an AI can work from. Every output is data, never instructions.")
     ap.add_argument("--version", action="version", version=f"tt-crawl {__version__}")
     sub = ap.add_subparsers(dest="command", required=True)
     from . import audit, check, chrome, docs, importer, places, playbooks, sheet, shoot, site
@@ -22,6 +22,7 @@ def build_parser():
     chrome.add_parser(sub)
     shoot.add_parser(sub)
     sheet.add_parser(sub)
+    ap.commands = sub.choices
     return ap
 
 
@@ -34,9 +35,8 @@ def main(argv=None):
     except Exception as e:
         if os.environ.get("TTCRAWL_DEBUG"):
             raise
-        sys.stderr.write("tt-crawl %s: %s\n  Try: tt-crawl %s --help to check the arguments; "
-                         "TTCRAWL_DEBUG=1 shows where it failed\n" % (args.command, str(e) or type(e).__name__, args.command))
-        return 1
+        return fail(args, 1, str(e) or type(e).__name__,
+                    "tt-crawl %s --help to check the arguments; TTCRAWL_DEBUG=1 shows where it failed" % args.command)
 
 
 if __name__ == "__main__":

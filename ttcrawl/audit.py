@@ -20,13 +20,12 @@ what a site owner should fix:
                    [--inventory raw/site/<host>/_index/inventory.json]   # also the old URLs, as `check` does
 
 Writes raw/audit/<host>/<date>.md (with an "## Issues" section only when there are
-issues) and a JSON file beside it, prints one JSON summary line, and exits 1
+issues) and a JSON file beside it, prints how many pages and issues by kind, and exits 1
 when anything needs fixing, which is what makes a scheduled job alert the
 owner. Static fetches: it checks the HTML the server sends.
 """
 import json
 import os
-import sys
 import time
 from collections import Counter
 from urllib.parse import urljoin, urlsplit
@@ -34,6 +33,7 @@ from urllib.parse import urljoin, urlsplit
 from . import net, paths
 from .a11y import findings as a11y_findings
 from .html import parse_page
+from .say import command, count, done, fail
 from .site import parse_sitemap
 from .structured import jsonld
 
@@ -262,18 +262,20 @@ def markdown(report):
 
 def run(args):
     if not net.local_or_public_http_url(args.site_url):
-        sys.stderr.write("audit: %s is neither a public http(s) URL nor http://localhost\n"
-                         "  Try: tt-crawl audit https://theirsite.com, or tt-crawl audit http://localhost:3000\n" % args.site_url)
-        return 2
-    if args.inventory and not os.path.isfile(args.inventory):
-        sys.stderr.write("audit: no inventory at %s\n  Try: tt-crawl audit %s --inventory raw/site/<host>/_index/inventory.json\n"
-                         % (args.inventory, args.site_url))
-        return 2
-    out = os.path.join(paths.audit_dir(args.site_url), paths.today() + ".md")
+        return fail(args, 2, "%s is neither a public http(s) URL nor http://localhost" % args.site_url,
+                    "tt-crawl audit https://theirsite.com, or tt-crawl audit http://localhost:3000")
+    try_inventory = "tt-crawl audit %s --inventory raw/site/<host>/_index/inventory.json" % args.site_url
     inventory = None
     if args.inventory:
-        with open(args.inventory) as fh:
-            inventory = json.load(fh)
+        if not os.path.isfile(args.inventory):
+            return fail(args, 2, "no inventory at %s" % args.inventory, try_inventory)
+        try:
+            with open(args.inventory) as fh:
+                inventory = json.load(fh)
+            inventory.get("records")
+        except (OSError, ValueError, AttributeError) as e:
+            return fail(args, 2, "cannot read %s (%s)" % (args.inventory, str(e) or type(e).__name__), try_inventory)
+    out = os.path.join(paths.audit_dir(args.site_url), paths.today() + ".md")
     report = audit(args.site_url, args.max_pages, check_external=not args.no_external, inventory=inventory)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "w") as fh:
@@ -284,14 +286,26 @@ def run(args):
         paths.register_report(out, "_latest.json", {"host": paths.host_of(args.site_url), "site": args.site_url,
                                                          "updated": paths.today(), "ok": not report["issues"],
                                                          "issues": len(report["issues"])})
-    summary = {"ok": not report["issues"], "site": args.site_url, "pages": report["pages"], "issues": len(report["issues"]),
-               "by_kind": dict(Counter(i["kind"] for i in report["issues"])), "out": out}
-    print(json.dumps(summary))
+    by_kind = Counter(i["kind"] for i in report["issues"])
+    lines = ["%s: %d" % kv for kv in by_kind.most_common()]
+    if report["limit_reached"]:
+        lines.append("limit %d reached: %d pages not crawled (--max-pages for more)" % (args.max_pages, report["unread"]))
+    if report["external_skipped"]:
+        lines.append("left alone: %s at a private or unresolvable address" % count(len(report["external_skipped"]), "external link"))
+    if report["old_urls"]:
+        lines.append("old URLs: %d of %d answer" % (sum(1 for o in report["old_urls"] if o["verdict"] == "ok"), len(report["old_urls"])))
+    lines.append("report: %s (and .json beside it)%s" % (out, "" if args.no_register else "; raw/audit/_latest.json updated"))
+    done(args, {"ok": not report["issues"], "site": args.site_url, "pages": report["pages"], "issues": len(report["issues"]),
+                "by_kind": dict(by_kind), "out": out},
+         "%s, %s crawled, %s" % (args.site_url, count(report["pages"], "page"), count(len(report["issues"]), "issue")),
+         lines, "read the Issues section of %s and fix what it lists" % out if report["issues"] else None)
     return 1 if report["issues"] else 0
 
 
 def add_parser(sub):
-    p = sub.add_parser("audit", help="the weekly health check of a live site: broken links, SEO basics, sitemap drift")
+    p = command(sub, "audit", "the weekly health check of a live site: broken links, SEO basics, sitemap drift",
+                "Prints the site, pages crawled and issues by kind, and where the report went, then Next: when "
+                "there is something to fix. Exit 1 when anything needs fixing; a refusal goes to stderr with a Try: line.")
     p.add_argument("site_url", help="the live site, or http://localhost:PORT; the report goes to raw/audit/<host>/<date>.md")
     p.add_argument("--max-pages", type=int, default=200, help="pages to crawl (default 200)")
     p.add_argument("--inventory", default="", help="also check the old URLs from this inventory")

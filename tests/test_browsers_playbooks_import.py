@@ -172,7 +172,7 @@ class Harness(unittest.TestCase):
     def cli(self, *argv, expect=0):
         out, err = StringIO(), StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            args = cli.build_parser().parse_args(list(argv))
+            args = cli.build_parser().parse_args([*argv, "--json"])
             code = args.func(args)
         self.assertEqual(code, expect, err.getvalue())
         return (json.loads(out.getvalue().strip().splitlines()[-1]) if code == 0 else None), err.getvalue()
@@ -232,9 +232,9 @@ class ImportTests(Harness):
             self.cli("survey", "https://acme.com/", "--out", out, "--static", "--delay", "0")
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
-            summary, err = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01",
+            summary, _ = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01",
                                     "--static", "--images", "content")   # a survey fetches none; this asks for them
-            self.assertIn("1 pages (rss 1)", err)                       # the 2023 post stays out
+            self.assertEqual(summary["import"]["by_source"], {"rss": 1})   # the 2023 post stays out
             with open(os.path.join(out, "pages", "blog--one.md")) as f:
                 text = f.read()
             self.assertIn('date: "2025-06-03"', text)
@@ -263,8 +263,8 @@ class ImportTests(Harness):
             self.assertTrue(os.path.isfile(os.path.join(out, "pages", "blog--one.md")))
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
-            _, err = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01", "--static")
-            self.assertIn("1 pages (rss 1)", err)
+            summary, _ = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01", "--static")
+            self.assertEqual(summary["import"]["by_source"], {"rss": 1})
             with open(os.path.join(out, "pages", "blog--one.md")) as f:
                 self.assertIn('fetcher: "rss"', f.read())
 
@@ -287,8 +287,8 @@ class ImportTests(Harness):
             self.cli("brand", "https://acme.com/", "--out", out, "--static", "--delay", "0")
             with open(os.path.join(root, "raw", "site", "_sites.json")) as f:
                 self.assertIn('"wp_imported": false', f.read())
-            summary, err = self.cli("import", "--out", out, "--source", "wp", "--static")
-            self.assertIn("2 pages (wp-rest 2)", err)
+            summary, _ = self.cli("import", "--out", out, "--source", "wp", "--static")
+            self.assertEqual(summary["import"]["by_source"], {"wp-rest": 2})
             with open(os.path.join(out, "pages", "2025--06--storm-season.md")) as f:
                 text = f.read()
             self.assertIn('author: "Jane"', text)

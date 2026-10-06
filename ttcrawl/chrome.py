@@ -26,7 +26,7 @@ import tempfile
 import urllib.request
 import zipfile
 
-from . import browser, cdp, net
+from . import browser, cdp, net, say
 
 CFT_JSON = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
 OBSCURA_REPO = "https://github.com/h4ckf0r0day/obscura"
@@ -301,10 +301,18 @@ def run_setup(args):
     log = lambda m: sys.stderr.write(m + "\n")
     done, errors = setup(log=log)
     browsers = [b for b in ("chrome", "obscura") if done.get(b)]
-    print(json.dumps({"ok": bool(browsers) and bool(done.get("tt-crawl")), **done, "errors": errors}))
-    return 0 if browsers and done.get("tt-crawl") else 1
+    ok = bool(browsers) and bool(done.get("tt-crawl"))
+    lines = ["%s: %s" % (name, path or "failed: " + errors.get(name, "not installed")) for name, path in done.items()]
+    if not ok:
+        return say.fail(args, 1, "no browser installed" if done.get("tt-crawl") else "tt-crawl is not on the PATH",
+                        "tt-crawl setup again once that is fixed (it is safe to re-run)", *lines)
+    say.done(args, {"ok": ok, **done, "errors": errors}, "ready: %s" % ", ".join(n for n, p in done.items() if p), lines,
+             "tt-crawl playbook, for the steps of each job")
+    return 0
 
 
 def add_parser(sub):
-    p = sub.add_parser("setup", help="after pip install: tt-crawl on the PATH, then Chrome and Obscura (safe to re-run)")
+    p = say.command(sub, "setup", "after pip install: tt-crawl on the PATH, then Chrome and Obscura (safe to re-run)",
+                    "Prints where each of tt-crawl, chrome and obscura is, or why it failed; one failed step does not "
+                    "stop the others. Exit 1 when tt-crawl is not on the PATH or no browser could be installed.")
     p.set_defaults(func=run_setup)

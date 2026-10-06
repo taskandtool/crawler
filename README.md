@@ -20,7 +20,7 @@ tt-crawl --help
 ```
 
 Both lines are safe to re-run; together they update a machine to the
-latest. `setup` reports each step in its JSON line and carries on past one
+latest. `setup` prints where each piece landed and carries on past one
 that fails, so a machine that cannot have Chrome still gets Obscura.
 
 ## Commands
@@ -62,18 +62,23 @@ in them always match it.
 
 ## Output and exit codes
 
-- The crawls, `add`, `import`, `docs`, `places`, `check`, `audit` and
-  `setup` print one JSON summary line on stdout; progress goes to stderr.
-- `shoot` and `sheet` print a short text summary ending in `Next:`; `--json`
-  prints their result as JSON instead (for `shoot`, also when a width
-  failed). `playbook` prints the playbook.
-- A refusal or failure goes to stderr and says what was wrong, most with a
-  `Try:` line naming a command that works; stdout stays empty.
+- Every command prints text by default: a first line naming the command
+  and what happened, to what ("tt-crawl brand: acme.com, 12 pages read
+  (3 new, 9 unchanged), limit 100 reached"), then indented lines (counts,
+  where the files went, what was left alone and why), then `Next:` with a
+  read-only check or the playbook's next step. Progress goes to stderr.
+- `--json` prints the result as one JSON line instead, and a refusal as one
+  JSON object (`error`, `details`, `try`) on stderr. `shoot --json` prints
+  every width's result, failed ones too. `playbook` prints the playbook.
+- A refusal or failure goes to stderr in the same shape: the command and
+  what was wrong, the valid values, and a `Try:` line naming a command that works;
+  stdout stays empty. A long list is capped in the output and written whole
+  to the file it names (`docs/_skipped.json`).
 - Exit 0 done; 1 failed, or something needs fixing (`check`, `audit`,
-  `setup` without a browser); 2 refused or misused (a bad URL, a missing
-  folder or inventory); 3 `places` matched several (each named on stderr);
-  130 interrupted. `TTCRAWL_DEBUG=1` shows the traceback of an unexpected
-  failure.
+  `setup` without a browser); 2 refused or misused (a bad URL, flag or
+  date, a missing folder or inventory); 3 `places` matched several (each
+  named on stderr); 130 interrupted. `TTCRAWL_DEBUG=1` shows the traceback
+  of an unexpected failure.
 
 ## What a crawl writes
 
@@ -84,7 +89,8 @@ raw/site/<host>/            the site (www. dropped); raw/external/<host>/ for so
   shots/<name>/             with --screenshots: overview.png (the whole page in one image a model reads, when it is taller than one strip and under about 10,000px), strips a model reads unscaled (2576px tall at desktop width), page.png (the whole page, for people)
   structured/<name>.json    per-page JSON-LD, Open Graph, microdata, tracking IDs, embeds;
                             business.json merged from them
-  docs/                     the linked documents as markdown (tt-crawl docs), originals in docs/_files/
+  docs/                     the linked documents as markdown (tt-crawl docs), originals in docs/_files/,
+                            each link left alone and why in docs/_skipped.json
   _index/                   the index files, small whatever the site's size:
     inventory.json/.md      one record per discovered URL: status, title, links in and out, template, file
     templates.json/.md      each kind of page: how many, how many read, the layouts seen
@@ -118,7 +124,7 @@ One browser reads a crawl's pages and takes its screenshots (`--browser`):
   do. It is the heavier of the two. Where it is missing, a crawl installs
   Google's chrome-headless-shell on a Linux x86-64 machine; where it cannot
   be had or will not start, the crawl uses Obscura (or no browser when
-  neither works) and says so in the summary (`"browser_note"`). `renderer`
+  neither works) and says so in its output (`browser_note` under `--json`). `renderer`
   says what actually rendered the pages.
 - **obscura** is small and fast and refuses private addresses itself, but
   paints some things differently (a circle's curve, a box sized only by its

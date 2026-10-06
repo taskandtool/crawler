@@ -4,6 +4,8 @@ package, so the steps always match the crawler that is installed: read
 `tt-crawl playbook brand` rather than copying its flags anywhere."""
 import os
 
+from ..say import command
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -32,6 +34,7 @@ def run(args):
 
 
 def add_parser(sub):
-    p = sub.add_parser("playbook", help="the steps for a job (brand, survey, rebuild, import, launch, competitor, reference)")
+    p = command(sub, "playbook", "the steps for a job (brand, survey, rebuild, import, launch, competitor, reference)",
+                "Prints the playbook as markdown, or with no name, each playbook and what it is for.", with_json=False)
     p.add_argument("name", nargs="?", choices=names(), help="the job (default: list them, one line each)")
     p.set_defaults(func=run)

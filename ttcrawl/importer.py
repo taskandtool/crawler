@@ -11,15 +11,17 @@ way. The item's own HTML becomes the page's blocks, so a feed item and a
 crawled page read the same, and the pictures in it are fetched once each
 like any other.
 """
+import argparse
 import html as htmlmod
 import json
 import re
-import sys
 import time
 import xml.etree.ElementTree as ET
+from datetime import date
 from urllib.parse import urljoin, urlsplit
 
 from . import net, paths
+from .say import command, fail
 from .site import _start_run, folder_args, into_folder, load_robots, template_report
 
 SOURCES = ("auto", "wp", "rss", "shopify", "html")
@@ -232,13 +234,13 @@ def item_html(item):
 
 
 def run(args):
-    found = into_folder(args, "import")
+    found = into_folder(args)
     if not found:
         return 2
     profile, settings = found
     if not args.template and args.source not in ("auto", "wp"):
-        sys.stderr.write("--source %s imports one collection: name it with --template\n" % args.source)
-        return 2
+        return fail(args, 2, "--source %s imports one collection: name it with --template" % args.source,
+                    "tt-crawl import --source %s --template post" % args.source)
 
     def body(crawl):
         crawl.load_state()
@@ -264,11 +266,10 @@ def run(args):
             urls = []
         if not urls:
             rows = [t for t in template_report(crawl.records) if t["collection"]]
-            sys.stderr.write("%s; the collections are: %s\n" % (
-                "no pages of template %r" % args.template if args.template
-                else "no WordPress REST API answered, so import needs --template",
-                ", ".join("%s (%d)" % (t["template"], t["count"]) for t in rows) or "none"))
-            return 2
+            return fail(args, 2, "no pages of template %r" % args.template if args.template
+                        else "no WordPress REST API answered, so import needs --template",
+                        "tt-crawl import --template %s" % (rows[0]["template"] if rows else "<template>"),
+                        "The collections: %s" % (", ".join("%s (%d)" % (t["template"], t["count"]) for t in rows) or "none"))
         # A page's date: its feed item's, else the sitemap's lastmod. With
         # --since, a page dated earlier, or with no date to judge by, stays out.
         chosen = []
@@ -306,11 +307,8 @@ def run(args):
                     time.sleep(crawl.pace["delay"])
                 crawl.read(u)
                 counts["html"] = counts.get("html", 0) + 1
-        what = args.template or "wordpress posts and pages"
         crawl.import_stats = {"template": args.template, "items": len(chosen), "by_source": counts,
                               "sources_found": used, "since": args.since, "limit": args.limit}
-        sys.stderr.write("import %s: %d pages (%s)\n" % (what, len(chosen),
-                                                          ", ".join("%s %d" % kv for kv in counts.items()) or "none"))
         code = crawl.write()
         if wordpress:         # the whole WordPress site, not one collection of it
             paths.register_site(crawl.out, {"wp_imported": True})
@@ -318,15 +316,25 @@ def run(args):
     return _start_run(args, profile, body, settings)
 
 
+def day(value):
+    """--since: a date, as YYYY-MM-DD."""
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not a date as YYYY-MM-DD" % value)
+
+
 def add_parser(sub):
-    p = sub.add_parser("import", help="a collection (posts, products) into a crawled site's folder from its own feed; "
-                                      "a WordPress site's posts and pages with no --template")
+    p = command(sub, "import", "a collection (posts, products) into a crawled site's folder from its own feed; "
+                               "a WordPress site's posts and pages with no --template",
+                "Prints the collection, how many pages came from which source and the folder's totals, what was "
+                "left alone, then Next:. A refusal goes to stderr with a Try: line.")
     p.add_argument("--template", default=None,
                    help="the template to import, as _index/templates.md names it (post, /blog/*); without one, every "
                         "post and page of a WordPress site")
     p.add_argument("--source", choices=SOURCES, default="auto",
                    help="where items come from (default auto: every feed the site answers, a page none carries read as HTML)")
-    p.add_argument("--since", default=None, help="only items dated on or after YYYY-MM-DD")
+    p.add_argument("--since", type=day, default=None, help="only items dated on or after YYYY-MM-DD")
     p.add_argument("--limit", type=int, default=0, help="at most N items, newest first")
     folder_args(p)
     p.set_defaults(func=run)

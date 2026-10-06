@@ -185,7 +185,7 @@ class CrawlFolderTests(unittest.TestCase):
     def run_cli(self, *argv, expect=0):
         buf, err = StringIO(), StringIO()
         with redirect_stdout(buf), redirect_stderr(err):
-            args = cli.build_parser().parse_args(list(argv))
+            args = cli.build_parser().parse_args([*argv, "--json"])
             code = args.func(args)
         self.assertEqual(code, expect, err.getvalue())
         return json.loads(buf.getvalue().strip().splitlines()[-1]) if code == 0 and buf.getvalue().strip() else err.getvalue()

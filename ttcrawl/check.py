@@ -3,11 +3,11 @@ requested on the new host; each row gets a verdict; the new sitemap is
 diffed against the inventory; the home page's JSON-LD must parse."""
 import json
 import os
-import sys
 from urllib.parse import urlsplit, urlunsplit
 
 from . import net, paths
 from .html import parse_page
+from .say import command, count, done, fail
 from .site import parse_sitemap
 from .structured import jsonld
 
@@ -57,20 +57,22 @@ def jsonld_types_of(parsed):
 def run(args):
     site = paths.the_site()
     args.inventory = args.inventory or (paths.index(site, "inventory.json") if site else None)
+    try_cmd = "tt-crawl check %s --inventory raw/site/<host>/_index/inventory.json" % args.new_base_url
+    folders = "Crawl folders: %s" % (", ".join(paths.site_folders()) or "none")
     if not args.inventory or not os.path.isfile(args.inventory):
-        sys.stderr.write("check: %s\n  Crawl folders: %s\n"
-                         "  Try: tt-crawl check %s --inventory raw/site/<host>/_index/inventory.json\n"
-                         % ("no inventory at %s" % args.inventory if args.inventory
-                            else "needs --inventory, the old site's raw/site/<host>/_index/inventory.json",
-                            ", ".join(paths.site_folders()) or "none", args.new_base_url))
-        return 2
-    with open(args.inventory) as f:
-        inv = json.load(f)
+        return fail(args, 2, "no inventory at %s" % args.inventory if args.inventory
+                    else "needs --inventory, the old site's raw/site/<host>/_index/inventory.json", try_cmd, folders)
+    try:
+        with open(args.inventory) as f:
+            inv = json.load(f)
+        inv.get("records")
+    except (OSError, ValueError, AttributeError) as e:
+        return fail(args, 2, "cannot read %s (%s)" % (args.inventory, str(e) or type(e).__name__), try_cmd, folders)
     out = os.path.join(paths.audit_dir(inv.get("start") or args.new_base_url), "launch-%s.md" % paths.today())
     new_base = args.new_base_url.rstrip("/")
     if not net.local_or_public_http_url(new_base):
-        sys.stderr.write("refusing: the new base is neither a public http(s) url nor http://localhost\n")
-        return 2
+        return fail(args, 2, "%s is neither a public http(s) URL nor http://localhost" % args.new_base_url,
+                    "tt-crawl check http://localhost:3000, or tt-crawl check https://theirdomain.com")
     rows = []
     for rec in inv.get("records", []):
         if rec.get("reason") in ("unread", "robots") or (rec.get("status") not in (200, None) and not rec.get("file")):
@@ -116,9 +118,22 @@ def run(args):
     paths.register_report(out, "_launch.json", {"host": paths.host_of(inv.get("start") or new_base), "new_base": new_base,
                                                      "updated": paths.today(), "ok": not (counts[MISSING] or counts[ERROR]),
                                                      "missing": counts[MISSING], "errors": counts[ERROR]})
-    print(json.dumps({"checked": len(rows), **counts, "sitemap_entries": len(sitemap_urls),
-                      "missing_from_sitemap": len(missing_from_sitemap), "home_jsonld": home.get("jsonld_types", []), "out": out}))
-    return 1 if counts[MISSING] or counts[ERROR] else 0
+    bad = [r for r in rows if r["verdict"] in (MISSING, ERROR)]
+    lines = ["%s %s: %s" % (r["verdict"], r["old_url"], r["status"] or r.get("error") or "no answer") for r in bad[:10]]
+    if len(bad) > 10:
+        lines.append("%d more in the report" % (len(bad) - 10))
+    lines.append(("sitemap: %s, %d kept pages missing from it" % (count(len(sitemap_urls), "entry", "entries"), len(missing_from_sitemap)))
+                 if sitemap_urls else "sitemap: no sitemap.xml on the new site")
+    lines.append("home page: status %s, JSON-LD %s" % (home["status"], ", ".join(home.get("jsonld_types", [])) or "none parsed"))
+    lines.append("report: %s (and .json beside it)" % out)
+    done(args, {"checked": len(rows), **counts, "sitemap_entries": len(sitemap_urls),
+                "missing_from_sitemap": len(missing_from_sitemap), "home_jsonld": home.get("jsonld_types", []), "out": out},
+         "%s checked on %s: %s" % (count(len(rows), "old URL"), new_base,
+                                    ", ".join("%d %s" % (counts[v], v) for v in (OK, MISSING, CHAIN, NOINDEX, ERROR) if counts[v]) or "none"),
+         lines,
+         "fix each missing or failing URL (a page or a redirect), then tt-crawl check %s again" % new_base if bad
+         else "read %s for the findings on each page (title, h1, description)" % out)
+    return 1 if bad else 0
 
 
 def markdown(report):
@@ -146,7 +161,10 @@ def markdown(report):
 
 
 def add_parser(sub):
-    p = sub.add_parser("check", help="the launch check: every inventory URL on the new host, the sitemap, the home page's JSON-LD")
+    p = command(sub, "check", "the launch check: every inventory URL on the new host, the sitemap, the home page's JSON-LD",
+                "Prints how many old URLs were checked and each verdict's count, the missing and failing ones, the "
+                "sitemap and home page, and where the report went, then Next:. Exit 1 when an old URL is missing or "
+                "fails; a refusal goes to stderr with a Try: line.")
     p.add_argument("new_base_url", help="the new site: http://localhost:PORT before publishing, its public URL after")
     p.add_argument("--inventory", default=None, help="the old site's inventory (default: the one raw/site/<host>)")
     p.set_defaults(func=run)

@@ -5,14 +5,14 @@ server and no image library.
 
     tt-crawl sheet static/images/logos/*.png --out raw/logos.png
 """
+import argparse
 import base64
 import html
-import json
 import mimetypes
 import os
-import sys
 
 from . import cdp, chrome
+from .say import command, done, fail
 
 COLUMNS, CELL_W, CELL_H = 4, 260, 150
 
@@ -62,39 +62,45 @@ def run(args):
     paths = [p for p in args.pictures if os.path.isfile(p)]
     missing = [p for p in args.pictures if not os.path.isfile(p)]
     if not paths:
-        sys.stderr.write("sheet: no pictures to draw%s\n" % (": not found: " + ", ".join(missing) if missing else ""))
-        return 2
+        return fail(args, 2, "no pictures to draw: not found: %s" % ", ".join(missing),
+                    "tt-crawl sheet static/images/logos/*.png --out raw/logos.png")
     driver, note = chrome.driver("chrome")
     if driver is None:
-        sys.stderr.write("sheet: %s\n" % (note or "no browser on this machine (tt-crawl setup installs one)"))
-        return 1
+        return fail(args, 1, note or "no browser on this machine", "tt-crawl setup, then this command again")
     try:
-        w, h = (int(x) for x in args.cell.lower().split("x"))
-        result = driver._use(lambda b: draw(b, paths, args.out, args.columns, (w, h)))
+        result = driver._use(lambda b: draw(b, paths, args.out, args.columns, args.cell))
     except cdp.CDPError as e:
-        sys.stderr.write("sheet: the browser failed: %s\n" % str(e).split("\n")[0][:300])
-        return 1
+        return fail(args, 1, "the browser failed: %s" % str(e).split("\n")[0][:300],
+                    "the same command again; tt-crawl setup when it fails twice")
     finally:
         driver.stop()
     result["numbered"] = [os.path.basename(p) for p in paths]
-    if args.json:
-        print(json.dumps(result, indent=2))
-    else:
-        print("sheet: %s  (%d pictures, numbered in this order)" % (args.out, len(paths)))
-        for i, p in enumerate(paths, 1):
-            print("  %d  %s" % (i, p))
-        if missing:
-            print("  not found: %s" % ", ".join(missing))
-        print("Next: look at the sheet once and name each picture by its number.")
+    lines = ["%d  %s" % (i, p) for i, p in enumerate(paths, 1)]
+    if missing:
+        lines.append("left alone, not found: %s" % ", ".join(missing))
+    done(args, result, "%s (%d pictures, numbered in this order)" % (args.out, len(paths)), lines,
+         "look at the sheet once and name each picture by its number")
     return 0
 
 
+def cell(value):
+    """--cell: WxH in pixels."""
+    try:
+        w, h = (int(x) for x in value.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not WxH in pixels, e.g. 380x300" % value)
+    if w < 80 or h < 80:
+        raise argparse.ArgumentTypeError("%r is too small: each side at least 80 pixels" % value)
+    return w, h
+
+
 def add_parser(sub):
-    p = sub.add_parser("sheet", help="several pictures as one numbered contact sheet, to name them in one look")
+    p = command(sub, "sheet", "several pictures as one numbered contact sheet, to name them in one look",
+                "Prints where the sheet went and each picture's number, then Next:. A refusal goes to stderr with a "
+                "Try: line.")
     p.add_argument("pictures", nargs="+", help="image files")
     p.add_argument("--out", default="sheet.png", help="where the sheet goes (default sheet.png)")
     p.add_argument("--columns", type=int, default=COLUMNS, help="pictures a row (default %d)" % COLUMNS)
-    p.add_argument("--cell", default="%dx%d" % (CELL_W, CELL_H),
+    p.add_argument("--cell", type=cell, default=(CELL_W, CELL_H),
                    help="each cell's size in pixels, WxH (default %dx%d; 380x300 suits photographs)" % (CELL_W, CELL_H))
-    p.add_argument("--json", action="store_true", help="the result as JSON")
     p.set_defaults(func=run)

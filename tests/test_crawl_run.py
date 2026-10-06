@@ -34,7 +34,7 @@ def response(url, status=200, body=b"", headers=None):
 def args_for(out, command="site", urls=("https://acme.com/",), **kw):
     """The arguments the real command line builds, with test overrides."""
     from ttcrawl import cli
-    argv = [command, *urls, "--out", out, "--static"] + ([] if command == "add" else ["--delay", "0"])
+    argv = [command, *urls, "--out", out, "--static", "--json"] + ([] if command == "add" else ["--delay", "0"])
     args = cli.build_parser().parse_args(argv)
     for k, v in kw.items():
         setattr(args, k, v)
@@ -270,7 +270,8 @@ class SurveyTests(CrawlHarness):
             with redirect_stderr(err), redirect_stdout(StringIO()):
                 args = args_for(out, "add", (self.POSTS[-1],))
                 self.assertEqual(args.func(args), 2)
-            self.assertIn("no recorded crawl settings; crawl it again", err.getvalue())
+            self.assertIn("has no recorded crawl settings", err.getvalue())
+            self.assertIn("to crawl it again", err.getvalue())
 
     def test_add_needs_a_crawl_first(self):
         with tempfile.TemporaryDirectory() as out:

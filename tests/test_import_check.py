@@ -74,7 +74,7 @@ class CheckTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with redirect_stdout(StringIO()) as out, redirect_stderr(StringIO()):
-                    args = cli.build_parser().parse_args(["check", "http://localhost:3000", "--inventory", inv])
+                    args = cli.build_parser().parse_args(["check", "http://localhost:3000", "--inventory", inv, "--json"])
                     code = args.func(args)
             finally:
                 net.fetch_once = saved

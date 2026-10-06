@@ -54,14 +54,16 @@ class ShootTest(unittest.TestCase):
 
     def test_the_summary_says_where_to_look_and_what_next(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(), status=lambda u: 200)
-        text = shoot.report("http://localhost:3000/", results, False)
+        _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)
+        text = "\n".join(lines + ["Next: " + nxt])
         self.assertIn("uploads/home-1280/overview.png, then 01.png … 02.png", text)
         self.assertIn("page.png is the whole page for people", text)
         self.assertIn("Next: look at each overview", text)
 
     def test_a_failure_says_how_to_check_the_page_is_served(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(fail=True), status=lambda u: 200)
-        text = shoot.report("http://localhost:3000/", results, False)
+        _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)
+        text = "\n".join(lines + [nxt])
         self.assertIn("failed", text)
         self.assertIn("curl", text)
 

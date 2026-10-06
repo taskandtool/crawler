@@ -4,7 +4,7 @@ For a migration: every page with its text verbatim, every picture in the content
 ## Run
 ```
 tt-crawl survey https://theirsite.com            # first, always: the size and the templates; read templates.md
-tt-crawl pages https://theirsite.com --max-pages N   # N from the survey's "discovered" count (default 1000)
+tt-crawl pages https://theirsite.com --max-pages N   # N from the URLs the survey found (default 1000)
 tt-crawl docs
 tt-crawl import                                  # a WordPress site ("wordpress": true in raw/site/_sites.json): every post and page through its own API
 ```

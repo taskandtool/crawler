@@ -11,6 +11,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 from . import net, paths
+from .say import command, count, done, fail
 from .text import slugify
 
 MAX_DOC_BYTES = 25 * 1024 * 1024
@@ -46,27 +47,25 @@ def convert(path):
 
 def run(args):
     args.from_dir = args.from_dir or paths.the_site()
-    folders = ", ".join(paths.site_folders()) or "none"
+    folders = "Crawl folders: %s" % (", ".join(paths.site_folders()) or "none")
     if not args.from_dir:
-        sys.stderr.write("docs: needs --from, the crawl folder whose pages link the documents\n"
-                         "  Crawl folders: %s\n  Try: tt-crawl docs --from raw/site/<host>\n" % folders)
-        return 2
+        return fail(args, 2, "needs --from, the crawl folder whose pages link the documents",
+                    "tt-crawl docs --from raw/site/<host>", folders)
     inventory = paths.index(args.from_dir, "inventory.json")
     if not os.path.isfile(inventory):
-        sys.stderr.write("docs: no crawl at %s (no %s)\n  Crawl folders: %s\n"
-                         "  Try: tt-crawl docs --from raw/site/<host>, or crawl first: tt-crawl site URL\n"
-                         % (args.from_dir, inventory, folders))
-        return 2
+        return fail(args, 2, "no crawl at %s (no %s)" % (args.from_dir, inventory),
+                    "tt-crawl docs --from raw/site/<host>, or crawl first: tt-crawl site URL", folders)
     out = os.path.join(args.from_dir, paths.DOCS)
     try:
         docs = linked_documents(inventory)
     except (OSError, ValueError, AttributeError, KeyError, TypeError) as e:
-        sys.stderr.write("docs: cannot read %s (%s)\n"
-                         "  Try: crawl it again: tt-crawl site URL --out %s\n" % (inventory, str(e) or type(e).__name__, args.from_dir))
-        return 2
+        return fail(args, 2, "cannot read %s (%s)" % (inventory, str(e) or type(e).__name__),
+                    "tt-crawl site URL --out %s, to crawl it again" % args.from_dir)
     if not docs:
         paths.register_site(args.from_dir, {"docs_fetched": True, "docs": 0})
-        print(json.dumps({"documents": 0, "note": "no documents linked from %s" % args.from_dir}))
+        done(args, {"documents": 0, "note": "no documents linked from %s" % args.from_dir},
+             "no documents linked from the pages in %s" % args.from_dir,
+             next="read %s/_index/facts.json, then the pages" % args.from_dir)
         return 0
     root_host = None
     try:
@@ -127,9 +126,26 @@ def run(args):
         written += 1
     with open(index_path, "w") as f:
         json.dump(index, f, indent=2)
+    skipped_path = os.path.join(out, "_skipped.json")
+    with open(skipped_path, "w") as f:
+        json.dump(skipped, f, indent=2)
     paths.register_site(args.from_dir, {"docs_fetched": True, "docs": len(index)})
-    print(json.dumps({"documents": written, "skipped": len(skipped), "unconverted": sum(1 for d in index if not d["converted"]),
-                      "out": out, "skipped_reasons": skipped[:20]}))
+    unconverted = sum(1 for d in index if not d["converted"])
+    by_reason = {}
+    for x in skipped:
+        reason = x["reason"].split(":")[0]
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    lines = ["%s in %s, each as markdown beside its original in _files/; %s lists them" % (
+        count(len(index), "document"), out, index_path)]
+    if unconverted:
+        lines.append("%s could not be read as text; the original is kept" % count(unconverted, "document"))
+    if skipped:
+        lines.append("left alone: %s (%s); each with its reason in %s" % (
+            count(len(skipped), "link"), ", ".join("%s %d" % kv for kv in sorted(by_reason.items())), skipped_path))
+    done(args, {"documents": written, "skipped": len(skipped), "unconverted": unconverted, "out": out,
+                "skipped_reasons": skipped[:20], "skipped_file": skipped_path},
+         "%s fetched from the pages in %s" % (count(written, "new document"), args.from_dir), lines,
+         "read the documents in %s/ for prices, services and facts" % out)
     return 0
 
 
@@ -145,7 +161,10 @@ def _date(url):
 
 
 def add_parser(sub):
-    p = sub.add_parser("docs", help="the documents linked from the crawled pages, converted to markdown")
+    p = command(sub, "docs", "the documents linked from the crawled pages, converted to markdown",
+                "Prints how many documents were fetched into which folder, which could not be read as text, and "
+                "the links left alone (all of them, with reasons, in docs/_skipped.json), then Next:. "
+                "A refusal goes to stderr with a Try: line.")
     p.add_argument("--from", dest="from_dir", default=None,
                    help="the crawl to read the links from, its docs/ the destination (default: the one raw/site/<host>)")
     p.set_defaults(func=run)
