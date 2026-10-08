@@ -311,6 +311,8 @@ class PageParser(HTMLParser):
                 "srcset": [self._abs(p.strip().split()[0]) for p in srcset.split(",") if p.strip()],
                 "srcset_w": self._srcset(srcset),
                 "alt": htmlmod.unescape(a.get("alt") or "").strip(),
+                # alt="" marks a decorative image; only an <img> with no alt at all is missing one
+                "alt_missing": "alt" not in a and a.get("aria-hidden") != "true" and a.get("role") not in ("presentation", "none"),
                 "width": _int(a.get("width")), "height": _int(a.get("height")),
                 "landmark": self.landmark, "in_link": self._link_text is not None,
                 "link_href": self._abs(self._link_attrs.get("href", "")) if self._link_text is not None and getattr(self, "_link_attrs", None) else "",

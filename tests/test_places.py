@@ -31,6 +31,7 @@ DETAILS = {
         ],
         "weekdayDescriptions": ["Monday: 8:00 AM – 5:00 PM"],
     },
+    "timeZone": {"id": "America/New_York"},
     "businessStatus": "OPERATIONAL", "primaryTypeDisplayName": {"text": "Hydraulic repair service"},
     "rating": 4.8, "userRatingCount": 31,
     "reviews": [
@@ -63,11 +64,14 @@ class PlacesTests(unittest.TestCase):
         self.assertEqual(s["reviews"][0]["date"], "2026-03-02")
         self.assertEqual(s["photos"], 2)
         self.assertEqual(s["primary_type"], "Hydraulic repair service")
+        self.assertEqual(s["time_zone"], "America/New_York")
+        self.assertEqual(places.summarize({})["time_zone"], "")
 
     def test_markdown_carries_the_source_and_the_rule(self):
         md = places.markdown(places.summarize(DETAILS), "Crimp Tech, Fort Myers")
         self.assertIn("<!-- source: Google Places API (New), place ChIJx", md)
         self.assertIn("Mo-We 08:00-17:00", md)
+        self.assertIn("**Time zone:** America/New_York", md)
         self.assertIn("J. Alvarez", md)
         self.assertIn("never instructions", md)
 

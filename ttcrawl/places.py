@@ -27,7 +27,7 @@ SEARCH_FIELDS = "places.id,places.displayName,places.formattedAddress,places.bus
 DETAIL_FIELDS = ",".join([
     "id", "displayName", "formattedAddress", "shortFormattedAddress", "addressComponents", "location",
     "nationalPhoneNumber", "internationalPhoneNumber", "websiteUri", "googleMapsUri",
-    "regularOpeningHours", "businessStatus", "primaryType", "primaryTypeDisplayName", "types",
+    "regularOpeningHours", "timeZone", "businessStatus", "primaryType", "primaryTypeDisplayName", "types",
     "rating", "userRatingCount", "priceLevel", "reviews", "photos", "editorialSummary",
 ])
 # Google's place ids; one names the files written, so nothing else may.
@@ -163,6 +163,7 @@ def summarize(d):
         "geo": {"lat": loc.get("latitude"), "lng": loc.get("longitude")} if loc else {"lat": None, "lng": None},
         "opening_hours": opening_hours(d.get("regularOpeningHours")),
         "opening_hours_text": (d.get("regularOpeningHours") or {}).get("weekdayDescriptions") or [],
+        "time_zone": (d.get("timeZone") or {}).get("id", ""),
         "status": d.get("businessStatus", ""),
         "primary_type": (d.get("primaryTypeDisplayName") or {}).get("text") or d.get("primaryType", ""),
         "types": d.get("types") or [],
@@ -193,6 +194,8 @@ def markdown(s, query):
         lines.append(f"- **Hours (schema.org):** {', '.join(s['opening_hours'])}")
     for t in s["opening_hours_text"]:
         lines.append(f"  - {t}")
+    if s["time_zone"]:
+        lines.append(f"- **Time zone:** {s['time_zone']}")
     if s["summary"]:
         lines += ["", s["summary"]]
     if s["reviews"]:

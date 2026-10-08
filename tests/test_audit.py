@@ -9,7 +9,7 @@ SITE = {
     "https://acme.test/": (200, """<html><head><title>Acme</title><meta name="description" content="Roofs."><link rel="canonical" href="https://acme.test/"></head>
         <body><header><nav><a href="/about">About</a><a href="/gone">Gone</a></nav></header><main><h1>Acme</h1>
         <a href="https://partner.test/ok">Partner</a><a href="https://partner.test/dead">Dead</a>
-        <img src="/img/hero.jpg" alt="crew"><img src="/img/missing.png"><img src="/img/huge.jpg" alt="big"></main></body></html>"""),
+        <img src="/img/hero.jpg" alt="crew"><img src="/img/missing.png"><img src="/img/hero.jpg" alt=""><img src="/img/hero.jpg" aria-hidden="true"><video src="/img/hero.jpg"></video><img src="/img/huge.jpg" alt="big"></main></body></html>"""),
     "https://acme.test/about": (200, """<html><head><title>Acme</title></head><body><h1>One</h1><h1>Two</h1>
         <a href="/old-page">Old</a><script type="application/ld+json">{not json</script></body></html>"""),
     "https://acme.test/gone": (404, ""),

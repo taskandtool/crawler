@@ -76,7 +76,7 @@ def page_findings(parsed, url, body_len, titles_seen, html="", descriptions_seen
         issues.append(f"canonical points at {parsed['canonical']}")
     if parsed["noindex"]:
         issues.append("noindex")
-    no_alt = [i for i in parsed["images"] if i.get("src") and not i.get("alt")]
+    no_alt = [i for i in parsed["images"] if i.get("src") and i.get("alt_missing")]
     if no_alt:
         issues.append(f"{len(no_alt)} image(s) without alt text")
     if body_len > MAX_HTML:
