@@ -141,7 +141,7 @@ def crawl(start_url, max_pages, fetch=net.fetch, seeds=()):
     return pages, targets, [u for u in queue if u not in seen]
 
 
-def audit(start_url, max_pages=200, fetch=net.fetch, external_limit=EXTERNAL_LIMIT, check_external=True, inventory=None,
+def audit(start_url, max_pages=200, fetch=net.fetch, check_external=True, inventory=None,
           public=net.public_http_url):
     root_host = urlsplit(start_url).netloc
     sitemap_list, sitemap_status = sitemap_urls(start_url, fetch)
@@ -175,7 +175,7 @@ def audit(start_url, max_pages=200, fetch=net.fetch, external_limit=EXTERNAL_LIM
             continue                   # sms:, whatsapp:, ftp: and the like: nothing to request
         internal = urlsplit(t).netloc == root_host
         if not internal:
-            if not check_external or checked_external >= external_limit:
+            if not check_external or checked_external >= EXTERNAL_LIMIT:
                 continue
             if not public(t):
                 skipped_external.append(t)

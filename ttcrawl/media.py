@@ -35,7 +35,7 @@ MODES = ("none", "brand", "content", "all")
 BRAND_PHOTOS = 60
 
 
-def guess_kind(img, logo_src=None):
+def guess_kind(img):
     src = (img.get("src") or "").lower()
     alt = (img.get("alt") or "").lower()
     host = (urlsplit(src).hostname or "").lower()
@@ -43,8 +43,6 @@ def guess_kind(img, logo_src=None):
     name = path.rsplit("/", 1)[-1]
     w, h = img.get("width"), img.get("height")
     jpeg = path.endswith((".jpg", ".jpeg"))
-    if logo_src and src == logo_src.lower():
-        return "logo"
     if "logo" in name or "logo" in alt:
         return "logo"
     if w and h and w <= 64 and h <= 64:

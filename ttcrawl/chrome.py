@@ -58,16 +58,16 @@ LIB_PACKAGES = {
 FONT_PACKAGES = ["fontconfig", "fonts-liberation", "fonts-dejavu-core", "fonts-noto-color-emoji"]
 
 
-def find_chrome(env=os.environ, exists=os.path.isfile, which=shutil.which):
+def find_chrome():
     """A Chrome to drive, or None: $CHROME_BIN, then
     chrome-headless-shell on the PATH, then the usual places."""
-    explicit = env.get("CHROME_BIN")
+    explicit = os.environ.get("CHROME_BIN")
     if explicit:
-        return explicit if exists(explicit) else None
-    found = which("chrome-headless-shell")
+        return explicit if os.path.isfile(explicit) else None
+    found = shutil.which("chrome-headless-shell")
     if found:
         return found
-    return next((c for c in CHROME_CANDIDATES if exists(c)), None)
+    return next((c for c in CHROME_CANDIDATES if os.path.isfile(c)), None)
 
 
 def can_install_chrome():
@@ -96,18 +96,18 @@ def packages_for(libs):
     return out, unknown
 
 
-def apt_install(choices, run=subprocess.run, log=print):
+def apt_install(choices, log=print):
     """Install each package (the first of its choices that apt knows) with
     sudo, quietly; returns the ones that could not be installed."""
     if not shutil.which("apt-get"):
         return [c[0] for c in choices]
     sudo = [] if os.geteuid() == 0 else ["sudo", "-n"]
-    run(sudo + ["apt-get", "update", "-qq"], capture_output=True, timeout=600)
+    subprocess.run(sudo + ["apt-get", "update", "-qq"], capture_output=True, timeout=600)
     failed = []
     for options in choices:
         for pkg in options:
-            r = run(sudo + ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq",
-                            "--no-install-recommends", pkg], capture_output=True, timeout=900)
+            r = subprocess.run(sudo + ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq",
+                               "--no-install-recommends", pkg], capture_output=True, timeout=900)
             if r.returncode == 0:
                 log("  installed %s" % pkg)
                 break
@@ -240,13 +240,13 @@ class Chrome:
         shutil.rmtree(self.profile, ignore_errors=True)
 
 
-def driver(choice, install=True, log=None):
+def driver(choice, install=True):
     """The browser a crawl reads pages and takes screenshots with, as
     (cdp.Driver or None, a note or None). chrome: Chrome when it is on the
     machine or can be installed, else Obscura, with a note saying so; a
     Chrome that will not start hands over to Obscura too (Driver.note).
     obscura: Obscura. None when neither is there."""
-    log = log or (lambda m: sys.stderr.write(m + "\n"))
+    log = lambda m: sys.stderr.write(m + "\n")
     note = None
     if choice == "chrome":
         binary = find_chrome()
