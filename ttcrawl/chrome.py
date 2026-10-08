@@ -240,29 +240,27 @@ class Chrome:
         shutil.rmtree(self.profile, ignore_errors=True)
 
 
-def driver(choice, install=True):
+def driver(install=True):
     """The browser a crawl reads pages and takes screenshots with, as
-    (cdp.Driver or None, a note or None). chrome: Chrome when it is on the
-    machine or can be installed, else Obscura, with a note saying so; a
-    Chrome that will not start hands over to Obscura too (Driver.note).
-    obscura: Obscura. None when neither is there."""
+    (cdp.Driver or None, a note or None): Chrome when it is on the machine
+    or can be installed, else Obscura, with a note saying so; a Chrome that
+    will not start hands over to Obscura too (Driver.note). None when
+    neither is there."""
     log = lambda m: sys.stderr.write(m + "\n")
     note = None
-    if choice == "chrome":
-        binary = find_chrome()
-        if not binary and install and can_install_chrome():
-            try:
-                binary = install_chrome(log=log)
-            except Exception as e:          # an install that fails costs fidelity, never the crawl
-                note = "chrome could not be installed (%s)" % str(e).split("\n")[0][:160]
-        obscura = browser.find_obscura()
-        if binary:
-            return cdp.Driver(binary, browser=Chrome, fallback=(obscura, cdp.Obscura) if obscura else None), None
-        note = note or "chrome is not on this machine and cannot be installed here"
+    binary = find_chrome()
+    if not binary and install and can_install_chrome():
+        try:
+            binary = install_chrome(log=log)
+        except Exception as e:              # an install that fails costs fidelity, never the crawl
+            note = "chrome could not be installed (%s)" % str(e).split("\n")[0][:160]
     obscura = browser.find_obscura()
+    if binary:
+        return cdp.Driver(binary, browser=Chrome, fallback=(obscura, cdp.Obscura) if obscura else None), None
+    note = note or "chrome is not on this machine and cannot be installed here"
     if obscura:
-        return cdp.Driver(obscura, browser=cdp.Obscura), note and note + "; obscura used instead"
-    return None, (note + "; " if note else "") + "obscura is not installed: no browser"
+        return cdp.Driver(obscura, browser=cdp.Obscura), note + "; obscura used instead"
+    return None, note + "; obscura is not installed: no browser"
 
 
 def install_launcher(which=shutil.which, log=print):

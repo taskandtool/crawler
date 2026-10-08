@@ -21,7 +21,7 @@ COMMANDS = sorted(cli.build_parser().commands)
 
 # One wrong input per command, each refused before the network.
 BAD = {
-    "site": ["ftp://acme.com/"], "survey": ["ftp://acme.com/"], "brand": ["http://10.0.0.5/"],
+    "survey": ["ftp://acme.com/"], "brand": ["http://10.0.0.5/"],
     "pages": ["acme"], "reference": ["http://localhost/"],
     "add": ["/about", "--out", "raw/site/nothere"],
     "import": ["--since", "last week"],
@@ -128,7 +128,7 @@ class TextByDefault(unittest.TestCase):
 
     def setUp(self):
         self.saved = (net.fetch_once, net.fetch_bytes, net.is_public_host, site.time.sleep, chrome.driver)
-        chrome.driver = lambda choice, **kw: (None, "no browser in tests")
+        chrome.driver = lambda **kw: (None, "no browser in tests")
         net.is_public_host = lambda host: True
         site.time.sleep = lambda s: None
         net.fetch_once = FakeFetch(SITE)
@@ -148,26 +148,26 @@ class TextByDefault(unittest.TestCase):
         return out.getvalue()
 
     def test_a_crawl_says_what_it_read_where_it_went_and_what_next(self):
-        text = self.run_cli("brand", "https://acme.com/", "--static")
+        text = self.run_cli("brand", "https://acme.com/")
         first, *rest = text.splitlines()
         self.assertRegex(first, r"^tt-crawl brand: acme\.com, \d+ pages read \(\d+ new\)$")
         self.assertIn("  raw/site/acme.com/pages/", text)
         self.assertIn("left alone:", text)
         self.assertIn("\n\nNext: ", text)
-        again = self.run_cli("brand", "https://acme.com/", "--static", "--max-pages", "1", "--json")
+        again = self.run_cli("brand", "https://acme.com/", "--max-pages", "1", "--json")
         summary = json.loads(again)
         self.assertEqual((summary["out"], summary["limit_reached"]), ("raw/site/acme.com", True))
-        text = self.run_cli("brand", "https://acme.com/", "--static", "--max-pages", "1")
+        text = self.run_cli("brand", "https://acme.com/", "--max-pages", "1")
         self.assertIn("unchanged), limit 1 reached", text.splitlines()[0])
 
     def test_a_crawl_that_read_nothing_says_to_check_the_site_answers(self):
         net.fetch_once = FakeFetch({})
-        text = self.run_cli("site", "https://acme.com/", "--static")
-        self.assertTrue(text.startswith("tt-crawl site: acme.com, 0 pages read (none)"), text)
+        text = self.run_cli("pages", "https://acme.com/")
+        self.assertTrue(text.startswith("tt-crawl pages: acme.com, 0 pages read (none)"), text)
         self.assertIn("Next: curl -sI https://acme.com/", text)
 
     def test_docs_names_the_file_with_every_link_left_alone(self):
-        self.run_cli("site", "https://acme.com/", "--static")
+        self.run_cli("pages", "https://acme.com/")
         with open("raw/site/acme.com/_index/inventory.json") as f:
             inv = json.load(f)
         inv["records"][0]["documents"] = ["https://elsewhere.com/%d.pdf" % i for i in range(25)]

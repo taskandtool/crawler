@@ -158,7 +158,7 @@ class CrawlFolderTests(unittest.TestCase):
     def setUp(self):
         self.saved = (net.fetch_once, net.fetch_bytes, net.is_public_host, site.time.sleep)
         self.saved_driver = chrome.driver
-        chrome.driver = lambda choice, **kw: (None, "no browser in tests")
+        chrome.driver = lambda **kw: (None, "no browser in tests")
         net.is_public_host = lambda host: True
         site.time.sleep = lambda s: None
         self.fetched_pages, self.fetched_images = [], []
@@ -193,7 +193,7 @@ class CrawlFolderTests(unittest.TestCase):
         return json.loads(buf.getvalue().strip().splitlines()[-1]) if code == 0 and buf.getvalue().strip() else err.getvalue()
 
     def crawl(self, out, *extra, expect=0):
-        return self.run_cli("site", "https://acme.com/", "--out", out, "--static",
+        return self.run_cli("pages", "https://acme.com/", "--out", out,
                             *extra, expect=expect)
 
     def test_layout_pictures_and_facts(self):
@@ -256,7 +256,7 @@ class CrawlFolderTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as out:
                 net.fetch_once = dies_on_team
                 with self.assertRaises(KeyboardInterrupt), redirect_stderr(StringIO()), redirect_stdout(StringIO()):
-                    args = cli.build_parser().parse_args(["site", "https://acme.com/", "--out", out, "--static"])
+                    args = cli.build_parser().parse_args(["pages", "https://acme.com/", "--out", out])
                     args.func(args)
                 read_before = [u for u in self.fetched_pages]
                 net.fetch_once = real

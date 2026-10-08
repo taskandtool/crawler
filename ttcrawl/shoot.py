@@ -54,7 +54,7 @@ def shoot(url, widths, out, first_screen=False, driver=None, status=page_status)
     host = (urlsplit(url).hostname or "").lower()
     allow = (host,) if host in LOCAL_HOSTS else ()
     if driver is None:
-        driver, note = chrome.driver("chrome")
+        driver, note = chrome.driver()
         if driver is None:
             return [(w, {"error": note or "no browser on this machine (tt-crawl setup installs one)"}) for w in widths]
     results = []

@@ -64,7 +64,7 @@ def run(args):
     if not paths:
         return fail(args, 2, "no pictures to draw: not found: %s" % ", ".join(missing),
                     "tt-crawl sheet static/images/logos/*.png --out raw/logos.png")
-    driver, note = chrome.driver("chrome")
+    driver, note = chrome.driver()
     if driver is None:
         return fail(args, 1, note or "no browser on this machine", "tt-crawl setup, then this command again")
     try:

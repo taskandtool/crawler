@@ -1,5 +1,5 @@
-"""`tt-crawl site`, `survey`, `brand`, `pages`, `reference` and `add`: read a
-site into its folder (paths.py has the layout). The five crawls are one crawl
+"""`tt-crawl survey`, `brand`, `pages`, `reference` and `add`: read a
+site into its folder (paths.py has the layout). The four crawls are one crawl
 with different defaults.
 
 A crawl reads pages, then writes everything from what it read:
@@ -9,8 +9,8 @@ A crawl reads pages, then writes everything from what it read:
   sitemap, then everything else found along the way (templates.Frontier),
   capped per template and per section when sampling (templates.Sampler).
   Each page is asked for plainly first (status, redirects, throttling), then
-  rendered once in the browser (`--browser`, chrome by default; none with
-  `--static`), and parsed into its content blocks, links, forms, images,
+  rendered once in the browser (Chrome, or Obscura where Chrome cannot run;
+  none when neither is there), and parsed into its content blocks, links, forms, images,
   reviews and structured data. Each page read is saved to `_cache/pages/` as it is read,
   and the crawl's place every few pages, so a long crawl can `--resume`.
 - **write**: the page files (frontmatter, then the page's own text,
@@ -158,11 +158,7 @@ class Crawl:
         self.settings = settings or {"images": args.images, "limit": args.max_pages}
         self.root_host = urlsplit(start).hostname or ""
         self.out = args.out
-        # --static is no browser at all: no render, no screenshots, no styles
-        self.driver, self.browser_note = (None, None) if args.static else chrome.driver(args.browser)
-        if args.static and (args.screenshots or args.styles):
-            self.browser_note = "--static: no browser, so no screenshots or styles"
-            args.screenshots = args.styles = False
+        self.driver, self.browser_note = chrome.driver()
         self.structured_dir = os.path.join(self.out, paths.STRUCTURED)
         manifest = _load_json(paths.index(self.out, "manifest.json")) or {}
         self.earlier = {p["url"]: p["file"] for p in (manifest.get("earlier") or []) + (manifest.get("pages") or [])
@@ -275,7 +271,7 @@ class Crawl:
         if self.driver is None:
             return [None] * n
         while len(self.extra_drivers) < n - 1:
-            d, _note = chrome.driver(self.args.browser, install=False)
+            d, _note = chrome.driver(install=False)
             if d is None:
                 break
             self.extra_drivers.append(d)
@@ -970,7 +966,7 @@ def into_folder(args):
     kept = folder_settings(state)
     if not kept:
         fail(args, 2, "%s has no recorded crawl settings" % args.out,
-             "tt-crawl site %s --out %s, to crawl it again" % (state["start"], args.out))
+             "tt-crawl pages %s --out %s, to crawl it again" % (state["start"], args.out))
         return None
     profile, settings = kept
     args.images = args.images or settings["images"]
@@ -982,7 +978,7 @@ def _start_run(args, profile, body, settings=None):
     start = net.normalize_url(args.start_url)
     root_host = urlsplit(start or "").hostname or ""
     if not start or not root_host or not net.is_public_host(root_host):
-        command = args.command if args.command not in ("add", "import") else "site"
+        command = args.command if args.command not in ("add", "import") else "pages"
         return fail(args, 2, "%s: the start host is missing or not a public address" % args.start_url,
                     "tt-crawl %s https://theirsite.com" % command)
     args.out = args.out or paths.site_dir(start, external=args.external)
@@ -1062,14 +1058,6 @@ IMAGES_HELP = ("which pictures to fetch: none; brand (the logo, the og:image and
                "footer's too)")
 
 
-def _read_args(p):
-    """How pages are read, for every command that reads them."""
-    p.add_argument("--browser", choices=("chrome", "obscura"), default="chrome",
-                   help="the browser that renders the pages and takes screenshots (default chrome, installed on "
-                        "first use where it can be; obscura when chrome cannot be had)")
-    p.add_argument("--static", action="store_true", help="no browser at all: plain fetches, no screenshots, no styles")
-
-
 def _crawl_args(p, max_pages, images):
     p.add_argument("start_url", help="the site's address, e.g. https://theirsite.com (a bare host is not enough)")
     p.add_argument("--out", default=None, help="the site's folder (default raw/site/<host>, or raw/external/<host> with --external)")
@@ -1077,7 +1065,6 @@ def _crawl_args(p, max_pages, images):
     p.add_argument("--max-pages", type=int, default=max_pages,
                    help=f"pages to read (default {max_pages}; the summary says how many were found)")
     p.add_argument("--images", choices=MODES, default=images, help=IMAGES_HELP + " (default %s)" % images)
-    _read_args(p)
     p.add_argument("--screenshots", action="store_true", help="the whole page as PNG strips under shots/<name>/")
     p.add_argument("--screenshot-pages", type=int, default=None, help="how many pages are screenshot, the first read (default all; brand 5)")
     p.add_argument("--styles", action="store_true", help="read computed styles off the first pages into _index/styles.json (browser only)")
@@ -1088,7 +1075,6 @@ def folder_args(p):
     """`add` and `import`: into a folder a crawl wrote, keeping its settings."""
     p.add_argument("--out", default=None, help="the folder a crawl wrote (default: the one raw/site/<host>)")
     p.add_argument("--images", choices=MODES, default=None, help=IMAGES_HELP + " (default: what the folder's crawl chose)")
-    _read_args(p)
     p.set_defaults(external=False, screenshots=False, screenshot_pages=None, styles=False,
                    per_template=None, per_section=None)
 
@@ -1098,10 +1084,6 @@ CRAWL_OUTPUT = ("Prints the site and how many pages were read (new, changed, unc
 
 
 def add_parser(sub):
-    p = say_command(sub, "site", "read a site into raw/site/<host>: pages, pictures, inventory, templates, facts", CRAWL_OUTPUT)
-    _crawl_args(p, DEFAULT_MAX_PAGES, "content")
-    p.set_defaults(func=run, profile="site", per_template=None, per_section=None)
-
     p = say_command(sub, "survey", "sample a big site: every URL listed by template, two of each read, no pictures fetched",
                     CRAWL_OUTPUT)
     _crawl_args(p, DEFAULT_MAX_PAGES, "none")

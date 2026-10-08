@@ -59,12 +59,11 @@ class GuardTests(unittest.TestCase):
         try:
             chrome.find_chrome = lambda **kw: "/bin/chrome"
             browser.find_obscura = lambda **kw: "/bin/obscura"
-            d, note = chrome.driver("chrome")
+            d, note = chrome.driver()
             self.assertEqual((d.browser_cls, d.engine, note), (chrome.Chrome, "chrome", None))
-            self.assertEqual(chrome.driver("obscura")[0].browser_cls, cdp.Obscura)
             chrome.find_chrome = lambda **kw: None
             chrome.can_install_chrome = lambda: False
-            d, note = chrome.driver("chrome")
+            d, note = chrome.driver()
             self.assertIs(d.browser_cls, cdp.Obscura)                                   # the fallback, said
             self.assertIn("obscura used instead", note)
             chrome.can_install_chrome = lambda: True
@@ -72,11 +71,11 @@ class GuardTests(unittest.TestCase):
             def fails(log):
                 raise RuntimeError("no network")
             chrome.install_chrome = fails
-            d, note = chrome.driver("chrome")
+            d, note = chrome.driver()
             self.assertIs(d.browser_cls, cdp.Obscura)              # an install failure costs fidelity, not the crawl
             self.assertIn("no network", note)
             browser.find_obscura = lambda **kw: None
-            d, note = chrome.driver("obscura")
+            d, note = chrome.driver()
             self.assertIsNone(d)
             self.assertIn("obscura is not installed", note)
         finally:
@@ -139,7 +138,6 @@ class PlaybookTests(unittest.TestCase):
         pages = p.parse_args(["pages", "https://a.com/"])
         self.assertIsNone(pages.screenshot_pages)
         self.assertEqual((pages.images, pages.max_pages, pages.per_template), ("content", 1000, None))
-        self.assertEqual((pages.browser, pages.static), ("chrome", False))       # chrome reads pages by default
 
 
 class FakeFetch:
@@ -162,7 +160,7 @@ class Harness(unittest.TestCase):
     def setUp(self):
         self.saved = (net.fetch_once, net.fetch_bytes, net.is_public_host, site.time.sleep)
         self.saved_driver = chrome.driver
-        chrome.driver = lambda choice, **kw: (None, "no browser in tests")
+        chrome.driver = lambda **kw: (None, "no browser in tests")
         net.is_public_host = lambda host: True
         site.time.sleep = lambda s: None
         net.fetch_bytes = lambda url, cap, content_types=None, sleep=None: (b"GIF89a\x01\x00\x01\x00" + b"\x00" * 10, "image/gif")
@@ -231,11 +229,11 @@ class ImportTests(Harness):
         pages = dict(SITE, **{"https://acme.com/feed": FEED})
         net.fetch_once = FakeFetch(pages)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static")
+            self.cli("survey", "https://acme.com/", "--out", out)
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
             summary, _ = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01",
-                                    "--static", "--images", "content")   # a survey fetches none; this asks for them
+                                    "--images", "content")   # a survey fetches none; this asks for them
             self.assertEqual(summary["import"]["by_source"], {"rss": 1})   # the 2023 post stays out
             with open(os.path.join(out, "pages", "blog--one.md")) as f:
                 text = f.read()
@@ -251,8 +249,8 @@ class ImportTests(Harness):
     def test_import_names_the_collections_when_the_template_is_wrong(self):
         net.fetch_once = FakeFetch(SITE)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static")
-            _, err = self.cli("import", "--out", out, "--template", "product", "--static", expect=2)
+            self.cli("survey", "https://acme.com/", "--out", out)
+            _, err = self.cli("import", "--out", out, "--template", "product", expect=2)
             self.assertIn("no pages of template 'product'", err)
 
     def test_a_page_read_before_is_imported_again_not_called_its_own_duplicate(self):
@@ -261,11 +259,11 @@ class ImportTests(Harness):
                               % LONG.replace("roofs", "gutters")})
         net.fetch_once = FakeFetch(pages)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static")
+            self.cli("survey", "https://acme.com/", "--out", out)
             self.assertTrue(os.path.isfile(os.path.join(out, "pages", "blog--one.md")))
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
-            summary, _ = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01", "--static")
+            summary, _ = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01")
             self.assertEqual(summary["import"]["by_source"], {"rss": 1})
             with open(os.path.join(out, "pages", "blog--one.md")) as f:
                 self.assertIn('fetcher: "rss"', f.read())
@@ -286,10 +284,10 @@ class ImportTests(Harness):
         net.fetch_once = FakeFetch(dict(SITE, **wp))
         with tempfile.TemporaryDirectory() as root:
             out = os.path.join(root, "raw", "site", "acme.com")
-            self.cli("brand", "https://acme.com/", "--out", out, "--static")
+            self.cli("brand", "https://acme.com/", "--out", out)
             with open(os.path.join(root, "raw", "site", "_sites.json")) as f:
                 self.assertIn('"wp_imported": false', f.read())
-            summary, _ = self.cli("import", "--out", out, "--source", "wp", "--static")
+            summary, _ = self.cli("import", "--out", out, "--source", "wp")
             self.assertEqual(summary["import"]["by_source"], {"wp-rest": 2})
             with open(os.path.join(out, "pages", "2025--06--storm-season.md")) as f:
                 text = f.read()
@@ -305,15 +303,15 @@ class ImportTests(Harness):
             # one collection of a WordPress site is not the whole site imported
             with open(os.path.join(root, "raw", "site", "_sites.json"), "w") as f:
                 json.dump({"entries": [dict(reg, wp_imported=False)], "latest": dict(reg, wp_imported=False)}, f)
-            self.cli("import", "--out", out, "--template", "/{n}/{n}/*", "--static")
+            self.cli("import", "--out", out, "--template", "/{n}/{n}/*")
             with open(os.path.join(root, "raw", "site", "_sites.json")) as f:
                 self.assertFalse(json.load(f)["latest"]["wp_imported"])
             # a source that is not WordPress imports one collection only
-            _, err = self.cli("import", "--out", out, "--source", "rss", "--static", expect=2)
+            _, err = self.cli("import", "--out", out, "--source", "rss", expect=2)
             self.assertIn("--source rss imports one collection: name it with --template", err)
             # a site with no WordPress API and no --template is told what to pass
             net.fetch_once = FakeFetch(SITE)
-            _, err = self.cli("import", "--out", out, "--static", expect=2)
+            _, err = self.cli("import", "--out", out, expect=2)
             self.assertIn("needs --template", err)
 
 
@@ -321,7 +319,7 @@ class StylesTests(Harness):
     def test_styles_no_page_rendered_are_said_to_be_skipped(self):
         net.fetch_once = FakeFetch(SITE)
         with tempfile.TemporaryDirectory() as out:                 # no browser here (chrome.driver stubbed)
-            summary, _ = self.cli("site", "https://acme.com/", "--out", out, "--styles")
+            summary, _ = self.cli("pages", "https://acme.com/", "--out", out, "--styles")
             self.assertEqual(summary["styles_skipped"], "no page rendered in the browser")
 
 

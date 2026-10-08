@@ -206,12 +206,12 @@ class RefusalTests(unittest.TestCase):
         try:
             site.run = fails
             with tempfile.TemporaryDirectory() as root:
-                code, out, err = self.run_in(root, "site", "https://acme.com/")
+                code, out, err = self.run_in(root, "pages", "https://acme.com/")
         finally:
             site.run = saved
         self.assertEqual(code, 1)
-        self.assertTrue(err.startswith("tt-crawl site: [Errno 13] Permission denied: '/read-only/acme.com'"), err)
-        self.assertIn("Try: tt-crawl site --help", err)
+        self.assertTrue(err.startswith("tt-crawl pages: [Errno 13] Permission denied: '/read-only/acme.com'"), err)
+        self.assertIn("Try: tt-crawl pages --help", err)
         self.assertNotIn("Traceback", err)
 
     def test_an_interrupt_exits_130_quietly(self):
@@ -222,7 +222,7 @@ class RefusalTests(unittest.TestCase):
         try:
             site.run = interrupted
             with tempfile.TemporaryDirectory() as root:
-                self.assertEqual(self.run_in(root, "site", "https://acme.com/"), (130, "", ""))
+                self.assertEqual(self.run_in(root, "pages", "https://acme.com/"), (130, "", ""))
         finally:
             site.run = saved
 

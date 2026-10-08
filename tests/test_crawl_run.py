@@ -33,10 +33,10 @@ def response(url, status=200, body=b"", headers=None):
     return {"status": status, "final_url": url, "chain": [], "headers": headers or {}, "body": body, "truncated": False}
 
 
-def args_for(out, command="site", urls=("https://acme.com/",), **kw):
+def args_for(out, command="pages", urls=("https://acme.com/",), **kw):
     """The arguments the real command line builds, with test overrides."""
     from ttcrawl import cli
-    argv = [command, *urls, "--out", out, "--static", "--json"]
+    argv = [command, *urls, "--out", out, "--json"]
     args = cli.build_parser().parse_args(argv)
     for k, v in kw.items():
         setattr(args, k, v)
@@ -54,7 +54,7 @@ class CrawlHarness(unittest.TestCase):
     def setUp(self):
         self.saved = (net.fetch_once, net.is_public_host, site.time.sleep, net.time.sleep)
         self.saved_driver = chrome.driver
-        chrome.driver = lambda choice, **kw: (None, "no browser in tests")
+        chrome.driver = lambda **kw: (None, "no browser in tests")
         net.is_public_host = lambda host: True
         site.time.sleep = lambda s: None
         self.sleeps = []
@@ -75,7 +75,7 @@ class CrawlHarness(unittest.TestCase):
         net.fetch_once, net.is_public_host, site.time.sleep, net.time.sleep = self.saved
         chrome.driver = self.saved_driver
 
-    def crawl(self, out, command="site", urls=("https://acme.com/",), expect=0, **kw):
+    def crawl(self, out, command="pages", urls=("https://acme.com/",), expect=0, **kw):
         # fetch() binds time.sleep as its default; route retries through a recorder
         real_fetch = net.fetch
 
@@ -149,23 +149,14 @@ class CrawlRunTests(CrawlHarness):
             def __init__(self, binary):
                 raise cdp.CDPError("chrome never opened its debugging port")
 
-        chrome.driver = lambda choice, **kw: (cdp.Driver("/bin/chrome", browser=Broken), None)
+        chrome.driver = lambda **kw: (cdp.Driver("/bin/chrome", browser=Broken), None)
         with tempfile.TemporaryDirectory() as out:
-            summary = self.crawl(out, static=False)
+            summary = self.crawl(out)
             self.assertEqual(summary["pages"], 3)                       # read without it
             self.assertIsNone(summary["renderer"])
             self.assertIn("chrome would not start", summary["browser_note"])
             with open(os.path.join(out, "_index", "run.json")) as f:
                 self.assertIsNone(json.load(f)["renderer"])
-
-    def test_static_starts_no_browser_and_says_what_it_skipped(self):
-        asked = []
-        chrome.driver = lambda choice, **kw: asked.append(choice) or (None, None)
-        with tempfile.TemporaryDirectory() as out:
-            summary = self.crawl(out, command="brand")                 # brand asks for screenshots and styles
-            self.assertEqual(asked, [])
-            self.assertEqual(summary["screenshots"], 0)
-            self.assertEqual(summary["browser_note"], "--static: no browser, so no screenshots or styles")
 
     def test_throttled_page_is_waited_out(self):
         self.throttle_left["https://acme.com/services"] = 2

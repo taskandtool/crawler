@@ -26,7 +26,6 @@ that fails, so a machine that cannot have Chrome still gets Obscura.
 ## Commands
 
 ```
-tt-crawl site URL          read a site: every page up to --max-pages (100), pictures in the content
 tt-crawl brand URL         a business's own site: brand pictures, styles, screenshots, collections sampled
 tt-crawl survey URL        a big site sampled: every URL listed by template, two of each read, no pictures
 tt-crawl pages URL         a whole site for a rebuild: up to 1000 pages and every picture in their content
@@ -45,15 +44,12 @@ tt-crawl playbook [NAME]   the steps for a job (brand, survey, rebuild, import, 
 tt-crawl setup             after pip install: the launcher and both browsers
 ```
 
-The five crawls (`site`, `brand`, `survey`, `pages`, `reference`) share their flags:
+The four crawls (`brand`, `survey`, `pages`, `reference`) share their flags:
 `--out DIR`, `--external` (someone else's site, into `raw/external/<host>`),
-`--max-pages N`, `--images none|brand|content|all`,
-`--browser chrome|obscura`, `--static` (no browser at all, so no
-screenshots or styles either), `--screenshots`, `--screenshot-pages N` (how
-many pages get them), `--styles`, and `--resume` to carry on an interrupted
-crawl. `add`
-and `import` take `--out`, `--images`, `--browser` and `--static`; their
-pictures default to what the folder's crawl chose. `check` and `audit` take
+`--max-pages N`, `--images none|brand|content|all`, `--screenshots`,
+`--screenshot-pages N` (how many pages get them), `--styles`, and `--resume`
+to carry on an interrupted crawl. `add` and `import` take `--out` and
+`--images`; their pictures default to what the folder's crawl chose. `check` and `audit` take
 a public URL or the site running on this machine (`http://localhost:PORT`).
 
 Each playbook is the recipe for one job: the commands in order, what to
@@ -118,20 +114,20 @@ contact, about and location pages.
 
 ## Browsers
 
-One browser reads a crawl's pages and takes its screenshots (`--browser`):
+One browser reads a crawl's pages and takes its screenshots:
 
-- **chrome** (the default) renders and paints as the browsers people use
-  do. It is the heavier of the two. Where it is missing, a crawl installs
-  Google's chrome-headless-shell on a Linux x86-64 machine; where it cannot
-  be had or will not start, the crawl uses Obscura (or no browser when
-  neither works) and says so in its output (`browser_note` under `--json`). `renderer`
-  says what actually rendered the pages.
-- **obscura** is small and fast and refuses private addresses itself, but
-  paints some things differently (a circle's curve, a box sized only by its
-  aspect ratio).
+- **Chrome** renders and paints as the browsers people use do. It is the
+  heavier of the two. Where it is missing, a crawl installs Google's
+  chrome-headless-shell on a Linux x86-64 machine.
+- **Obscura** is used where Chrome cannot be had or will not start. It is
+  small and fast and refuses private addresses itself, but paints some
+  things differently (a circle's curve, a box sized only by its aspect
+  ratio).
 
-`--static` reads pages without a browser and takes no screenshots or styles. `tt-crawl setup`
-installs both for this user.
+With neither, pages are read without a browser, with no screenshots or
+styles. The output says which happened (`browser_note` under `--json`);
+`renderer` says what actually rendered the pages. `tt-crawl setup` installs
+both for this user.
 
 ## Safety rails
 

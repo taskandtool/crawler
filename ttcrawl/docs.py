@@ -54,13 +54,13 @@ def run(args):
     inventory = paths.index(args.from_dir, "inventory.json")
     if not os.path.isfile(inventory):
         return fail(args, 2, "no crawl at %s (no %s)" % (args.from_dir, inventory),
-                    "tt-crawl docs --from raw/site/<host>, or crawl first: tt-crawl site URL", folders)
+                    "tt-crawl docs --from raw/site/<host>, or crawl first: tt-crawl pages URL", folders)
     out = os.path.join(args.from_dir, paths.DOCS)
     try:
         docs = linked_documents(inventory)
     except (OSError, ValueError, AttributeError, KeyError, TypeError) as e:
         return fail(args, 2, "cannot read %s (%s)" % (inventory, str(e) or type(e).__name__),
-                    "tt-crawl site URL --out %s, to crawl it again" % args.from_dir)
+                    "tt-crawl pages URL --out %s, to crawl it again" % args.from_dir)
     if not docs:
         paths.register_site(args.from_dir, {"docs_fetched": True, "docs": 0})
         done(args, {"documents": 0, "note": "no documents linked from %s" % args.from_dir},
