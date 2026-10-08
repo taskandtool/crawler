@@ -16,6 +16,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ttcrawl import cdp, chrome, net, site  # noqa: E402
 
+site.DELAY_S = 0                        # no pause between rounds of fake pages
+
 LONG = " ".join(["Our roofers replace slate and tile roofs across the county, with a ten year guarantee."] * 6)
 PAGES = {
     "https://acme.com/": f"<html><head><title>Acme</title></head><body><header><nav><a href='/'>Home</a> <a href='/services'>Services</a> <a href='/contact'>Contact</a></nav></header><main><h1>Acme Roofing</h1><p>{LONG}</p></main></body></html>",
@@ -34,7 +36,7 @@ def response(url, status=200, body=b"", headers=None):
 def args_for(out, command="site", urls=("https://acme.com/",), **kw):
     """The arguments the real command line builds, with test overrides."""
     from ttcrawl import cli
-    argv = [command, *urls, "--out", out, "--static", "--json"] + ([] if command == "add" else ["--delay", "0"])
+    argv = [command, *urls, "--out", out, "--static", "--json"]
     args = cli.build_parser().parse_args(argv)
     for k, v in kw.items():
         setattr(args, k, v)

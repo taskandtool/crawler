@@ -47,11 +47,11 @@ tt-crawl setup             after pip install: the launcher and both browsers
 
 The five crawls (`site`, `brand`, `survey`, `pages`, `reference`) share their flags:
 `--out DIR`, `--external` (someone else's site, into `raw/external/<host>`),
-`--max-pages N`, `--images none|brand|content|all`, `--delay S`,
-`--parallel N` (pages read at once), `--browser chrome|obscura`, `--static`
-(no browser at all, so no screenshots or styles either), `--screenshots`,
-`--screenshot-pages N` (how many pages get them), `--styles`,
-`--style-pages N`, and `--resume` to carry on an interrupted crawl. `add`
+`--max-pages N`, `--images none|brand|content|all`,
+`--browser chrome|obscura`, `--static` (no browser at all, so no
+screenshots or styles either), `--screenshots`, `--screenshot-pages N` (how
+many pages get them), `--styles`, and `--resume` to carry on an interrupted
+crawl. `add`
 and `import` take `--out`, `--images`, `--browser` and `--static`; their
 pictures default to what the folder's crawl chose. `check` and `audit` take
 a public URL or the site running on this machine (`http://localhost:PORT`).
@@ -145,7 +145,7 @@ installs both for this user.
 - Chrome loads anything, so every request a page makes in it is checked
   first and one to a private address is refused; Obscura refuses those
   itself.
-- robots.txt is honoured. There is a delay between pages (`--delay`, 0.5s).
+- robots.txt is honoured. Pages are read three at a time, half a second between rounds.
   A 429, or a 503 with Retry-After, is waited out (what the site asks,
   never less than 5, 10, 20, 40 seconds) and retried up to four times, and
   the rest of the run slows down. The status is asked before a page is

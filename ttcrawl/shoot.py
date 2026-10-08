@@ -41,7 +41,7 @@ def page_status(url, timeout=15):
         return None
 
 
-def shoot(url, widths, out, name=None, first_screen=False, driver=None, status=page_status):
+def shoot(url, widths, out, first_screen=False, driver=None, status=page_status):
     """[(width, meta)] for each width; meta carries `dir` and `strips`, or `error`.
     A page that answers 400 or above is not shot: a screenshot of an error
     page would look like success."""
@@ -50,7 +50,7 @@ def shoot(url, widths, out, name=None, first_screen=False, driver=None, status=p
         return [(w, {"error": "nothing answered at %s" % url}) for w in widths]
     if code >= 400:
         return [(w, {"error": "%s answered %d" % (url, code)}) for w in widths]
-    name = name or name_for(url)
+    name = name_for(url)
     host = (urlsplit(url).hostname or "").lower()
     allow = (host,) if host in LOCAL_HOSTS else ()
     if driver is None:
@@ -107,7 +107,7 @@ def run(args):
     if not re.match(r"^https?://", args.url):
         return fail(args, 2, "needs a full URL, not %s" % args.url, "tt-crawl shoot http://localhost:3000/services")
     widths = args.width or [1280, PHONE_WIDTH]
-    results = shoot(args.url, widths, args.out, name=args.name, first_screen=args.first_screen)
+    results = shoot(args.url, widths, args.out, first_screen=args.first_screen)
     failed = any(m.get("error") for _, m in results)
     if args.json:
         # every width's result, failed ones too, so a caller sees which
@@ -133,6 +133,5 @@ def add_parser(sub):
                    help="a width in pixels; repeat for more (default 1280 and 390)")
     p.add_argument("--first-screen", action="store_true", help="only what shows before scrolling, one image per width")
     p.add_argument("--out", default="uploads", help="where the images go (default uploads/), in <name>-<width>/")
-    p.add_argument("--name", default=None, help="folder name (default: home for /, else the path with dashes)")
     p.add_argument("--json", action="store_true", help="each width's result as JSON instead of the summary")
     p.set_defaults(func=run)

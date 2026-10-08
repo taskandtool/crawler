@@ -19,6 +19,8 @@ from ttcrawl.facts import Facts, action_score, jsonld_reviews, phones, reviews  
 from ttcrawl.html import parse_page  # noqa: E402
 from ttcrawl.media import Media, dimensions, file_name, variant_of  # noqa: E402
 
+site.DELAY_S = 0                        # no pause between rounds of fake pages
+
 
 def png(w, h):
     raw = b"".join(b"\x00" + b"\x00\x00\x00" * w for _ in range(h))
@@ -192,7 +194,7 @@ class CrawlFolderTests(unittest.TestCase):
 
     def crawl(self, out, *extra, expect=0):
         return self.run_cli("site", "https://acme.com/", "--out", out, "--static",
-                            "--delay", "0", *extra, expect=expect)
+                            *extra, expect=expect)
 
     def test_layout_pictures_and_facts(self):
         with tempfile.TemporaryDirectory() as out:
@@ -254,8 +256,7 @@ class CrawlFolderTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as out:
                 net.fetch_once = dies_on_team
                 with self.assertRaises(KeyboardInterrupt), redirect_stderr(StringIO()), redirect_stdout(StringIO()):
-                    args = cli.build_parser().parse_args(["site", "https://acme.com/", "--out", out, "--static",
-                                                          "--delay", "0"])
+                    args = cli.build_parser().parse_args(["site", "https://acme.com/", "--out", out, "--static"])
                     args.func(args)
                 read_before = [u for u in self.fetched_pages]
                 net.fetch_once = real

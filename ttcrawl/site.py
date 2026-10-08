@@ -56,6 +56,7 @@ STYLE_PAGES = 5
 # A brand read learns the look from the first pages (the start and what its
 # header links to); shooting every page cost most of the crawl's time.
 BRAND_SHOT_PAGES = 5
+DELAY_S = 0.5                # seconds between two rounds of pages; doubles when a site throttles
 MAX_DELAY_S = 8
 STATE_EVERY = 10             # pages between two saves of the crawl's place
 # Pages read at once, each in its own browser: most of a crawl is the browser
@@ -168,7 +169,7 @@ class Crawl:
                         if p.get("url") and p.get("file")}
         self.previous_hashes = {p["url"]: p.get("hash") for p in manifest.get("pages") or [] if p.get("url")}
         # A site that throttles us once is asked more gently for the rest of the run.
-        self.pace = {"delay": args.delay, "throttled": 0}
+        self.pace = {"delay": DELAY_S, "throttled": 0}
         self.records = {start: inventory.new_record(start)}
         self.order = []              # names of the pages kept, in reading order (their data is in _cache)
         self.skipped = []
@@ -282,7 +283,7 @@ class Crawl:
 
     def loop(self):
         requested = 0
-        width = max(1, getattr(self.args, "parallel", PARALLEL) or 1)
+        width = PARALLEL
         while len(self.frontier):
             budget = self.args.max_pages - len(self.order)
             if budget <= 0:
@@ -297,7 +298,7 @@ class Crawl:
             # Between every two rounds of requests, at the pace the site allows.
             if requested:
                 time.sleep(self.pace["delay"])
-            styles_left = self.args.styles and self.args.style_pages - len(self.style_readings)
+            styles_left = self.args.styles and STYLE_PAGES - len(self.style_readings)
             jobs = [(url, i < (styles_left or 0)) for i, (url, _t) in enumerate(batch)]
             drivers = self.workers(len(jobs))
             if len(drivers) < len(jobs):
@@ -363,7 +364,7 @@ class Crawl:
         what `fetch` brought back (fetched now when it has not run)."""
         rec = self.record(url)
         if fetched is None:
-            want_styles = self.args.styles and len(self.style_readings) < self.args.style_pages
+            want_styles = self.args.styles and len(self.style_readings) < STYLE_PAGES
             fetched = self.fetch(url, self.driver, want_styles)
         resp, got, engine = fetched
         if resp is None:
@@ -1076,14 +1077,10 @@ def _crawl_args(p, max_pages, images):
     p.add_argument("--max-pages", type=int, default=max_pages,
                    help=f"pages to read (default {max_pages}; the summary says how many were found)")
     p.add_argument("--images", choices=MODES, default=images, help=IMAGES_HELP + " (default %s)" % images)
-    p.add_argument("--delay", type=float, default=0.5, help="seconds between two rounds of pages (default 0.5)")
-    p.add_argument("--parallel", type=int, default=PARALLEL,
-                   help="pages read at once, each in its own browser (default %d; 1 after the site throttles)" % PARALLEL)
     _read_args(p)
     p.add_argument("--screenshots", action="store_true", help="the whole page as PNG strips under shots/<name>/")
     p.add_argument("--screenshot-pages", type=int, default=None, help="how many pages are screenshot, the first read (default all; brand 5)")
     p.add_argument("--styles", action="store_true", help="read computed styles off the first pages into _index/styles.json (browser only)")
-    p.add_argument("--style-pages", type=int, default=STYLE_PAGES, help="how many pages styles are read off (default %d)" % STYLE_PAGES)
     p.add_argument("--resume", action="store_true", help="carry on from where an interrupted crawl of the same site stopped")
 
 
@@ -1092,7 +1089,7 @@ def folder_args(p):
     p.add_argument("--out", default=None, help="the folder a crawl wrote (default: the one raw/site/<host>)")
     p.add_argument("--images", choices=MODES, default=None, help=IMAGES_HELP + " (default: what the folder's crawl chose)")
     _read_args(p)
-    p.set_defaults(external=False, screenshots=False, screenshot_pages=None, styles=False, style_pages=0, delay=0.5,
+    p.set_defaults(external=False, screenshots=False, screenshot_pages=None, styles=False,
                    per_template=None, per_section=None)
 
 

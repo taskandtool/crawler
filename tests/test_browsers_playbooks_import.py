@@ -14,6 +14,8 @@ from io import StringIO
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ttcrawl import browser, cdp, chrome, cli, importer, net, playbooks, site  # noqa: E402
 
+site.DELAY_S = 0                        # no pause between rounds of fake pages
+
 LONG = " ".join(["Our roofers replace slate and tile roofs across the county, with a ten year guarantee."] * 6)
 SITE = {
     "https://acme.com/": "<html><head><title>Acme</title></head><body><header><nav><a href='/about'>About</a></nav></header>"
@@ -229,7 +231,7 @@ class ImportTests(Harness):
         pages = dict(SITE, **{"https://acme.com/feed": FEED})
         net.fetch_once = FakeFetch(pages)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--delay", "0")
+            self.cli("survey", "https://acme.com/", "--out", out, "--static")
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
             summary, _ = self.cli("import", "--out", out, "--template", blog["template"], "--since", "2024-01-01",
@@ -249,7 +251,7 @@ class ImportTests(Harness):
     def test_import_names_the_collections_when_the_template_is_wrong(self):
         net.fetch_once = FakeFetch(SITE)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--delay", "0")
+            self.cli("survey", "https://acme.com/", "--out", out, "--static")
             _, err = self.cli("import", "--out", out, "--template", "product", "--static", expect=2)
             self.assertIn("no pages of template 'product'", err)
 
@@ -259,7 +261,7 @@ class ImportTests(Harness):
                               % LONG.replace("roofs", "gutters")})
         net.fetch_once = FakeFetch(pages)
         with tempfile.TemporaryDirectory() as out:
-            self.cli("survey", "https://acme.com/", "--out", out, "--static", "--delay", "0")
+            self.cli("survey", "https://acme.com/", "--out", out, "--static")
             self.assertTrue(os.path.isfile(os.path.join(out, "pages", "blog--one.md")))
             with open(os.path.join(out, "_index", "templates.json")) as f:
                 blog = next(t for t in json.load(f) if t["examples"][0].startswith("https://acme.com/blog/"))
@@ -284,7 +286,7 @@ class ImportTests(Harness):
         net.fetch_once = FakeFetch(dict(SITE, **wp))
         with tempfile.TemporaryDirectory() as root:
             out = os.path.join(root, "raw", "site", "acme.com")
-            self.cli("brand", "https://acme.com/", "--out", out, "--static", "--delay", "0")
+            self.cli("brand", "https://acme.com/", "--out", out, "--static")
             with open(os.path.join(root, "raw", "site", "_sites.json")) as f:
                 self.assertIn('"wp_imported": false', f.read())
             summary, _ = self.cli("import", "--out", out, "--source", "wp", "--static")
@@ -319,7 +321,7 @@ class StylesTests(Harness):
     def test_styles_no_page_rendered_are_said_to_be_skipped(self):
         net.fetch_once = FakeFetch(SITE)
         with tempfile.TemporaryDirectory() as out:                 # no browser here (chrome.driver stubbed)
-            summary, _ = self.cli("site", "https://acme.com/", "--out", out, "--styles", "--delay", "0")
+            summary, _ = self.cli("site", "https://acme.com/", "--out", out, "--styles")
             self.assertEqual(summary["styles_skipped"], "no page rendered in the browser")
 
 

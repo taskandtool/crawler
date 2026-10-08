@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_browsers_playbooks_import import SITE, FakeFetch  # noqa: E402
 from ttcrawl import chrome, cli, net, site  # noqa: E402
 
+site.DELAY_S = 0                        # no pause between rounds of fake pages
+
 COMMANDS = sorted(cli.build_parser().commands)
 
 # One wrong input per command, each refused before the network.
@@ -146,26 +148,26 @@ class TextByDefault(unittest.TestCase):
         return out.getvalue()
 
     def test_a_crawl_says_what_it_read_where_it_went_and_what_next(self):
-        text = self.run_cli("brand", "https://acme.com/", "--static", "--delay", "0")
+        text = self.run_cli("brand", "https://acme.com/", "--static")
         first, *rest = text.splitlines()
         self.assertRegex(first, r"^tt-crawl brand: acme\.com, \d+ pages read \(\d+ new\)$")
         self.assertIn("  raw/site/acme.com/pages/", text)
         self.assertIn("left alone:", text)
         self.assertIn("\n\nNext: ", text)
-        again = self.run_cli("brand", "https://acme.com/", "--static", "--delay", "0", "--max-pages", "1", "--json")
+        again = self.run_cli("brand", "https://acme.com/", "--static", "--max-pages", "1", "--json")
         summary = json.loads(again)
         self.assertEqual((summary["out"], summary["limit_reached"]), ("raw/site/acme.com", True))
-        text = self.run_cli("brand", "https://acme.com/", "--static", "--delay", "0", "--max-pages", "1")
+        text = self.run_cli("brand", "https://acme.com/", "--static", "--max-pages", "1")
         self.assertIn("unchanged), limit 1 reached", text.splitlines()[0])
 
     def test_a_crawl_that_read_nothing_says_to_check_the_site_answers(self):
         net.fetch_once = FakeFetch({})
-        text = self.run_cli("site", "https://acme.com/", "--static", "--delay", "0")
+        text = self.run_cli("site", "https://acme.com/", "--static")
         self.assertTrue(text.startswith("tt-crawl site: acme.com, 0 pages read (none)"), text)
         self.assertIn("Next: curl -sI https://acme.com/", text)
 
     def test_docs_names_the_file_with_every_link_left_alone(self):
-        self.run_cli("site", "https://acme.com/", "--static", "--delay", "0")
+        self.run_cli("site", "https://acme.com/", "--static")
         with open("raw/site/acme.com/_index/inventory.json") as f:
             inv = json.load(f)
         inv["records"][0]["documents"] = ["https://elsewhere.com/%d.pdf" % i for i in range(25)]
