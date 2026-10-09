@@ -67,6 +67,18 @@ class ShootTest(unittest.TestCase):
         self.assertIn("390px: scrolls sideways by 46px, first past the edge: div.gallery", lines)
         self.assertIn("sticks out past the edge", nxt)
 
+    def test_bands_that_start_on_different_edges_are_named(self):
+        bands = [{"x": 32, "band": "header"}, {"x": 104, "band": "section.food"}, {"x": 33, "band": "footer"},
+                 {"x": 104, "band": "section#story"}]
+        self.assertEqual(cdp.edge_groups(bands), [{"x": 32, "bands": ["header", "footer"]},
+                                                  {"x": 104, "bands": ["section.food", "section#story"]}])
+        self.assertEqual(cdp.edge_groups([{"x": 32, "band": "header"}, {"x": 33, "band": "footer"}]), [])
+        meta = {"dir": "uploads/home-1280", "strips": ["01.png"], "height": 800, "overview": None,
+                "edges": cdp.edge_groups(bands)}
+        _what, lines, nxt = shoot.report("http://localhost:3000/", [(1280, meta)], False)
+        self.assertIn("1280px: left edges differ: 32px header, footer; 104px section.food, section#story", lines)
+        self.assertIn("one left edge", nxt)
+
     def test_a_failure_says_how_to_check_the_page_is_served(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(fail=True), status=lambda u: 200)
         _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)

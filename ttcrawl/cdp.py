@@ -413,12 +413,45 @@ OVERFLOW_JS = """(() => {
   const name = el ? el.tagName.toLowerCase() + (el.classList.length ? '.' + [...el.classList].slice(0, 2).join('.') : '') : '';
   return { px: over, element: name };
 })()"""
+# Where each band's content starts on the left (the header, each child of
+# <main>, the footer): the leftmost visible text or image in it. Bands that
+# run edge to edge, or hold content only on the right, are left out; within
+# 2px counts as the same edge.
+EDGES_JS = """(() => {
+  const bands = [document.querySelector('header'), ...document.querySelectorAll('main > *'), document.querySelector('footer')].filter(Boolean);
+  const out = [];
+  for (const b of bands) {
+    let min = Infinity;
+    for (const el of b.querySelectorAll('h1,h2,h3,h4,p,a,img,li,dt,dd,blockquote,figure')) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.left >= 0 && r.left < min) min = r.left;
+    }
+    if (!isFinite(min) || min < 2 || min > innerWidth / 2) continue;  // edge to edge, or content only on the right
+    const name = b.tagName.toLowerCase() + (b.id ? '#' + b.id : (b.classList[0] ? '.' + b.classList[0] : ''));
+    out.push({ x: Math.round(min), band: name });
+  }
+  return out;
+})()"""
 
 
-def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], mobile=False, allow_hosts=()):
+def edge_groups(bands):
+    """[{x, bands}] for content edges that disagree, or [] when every band
+    starts on one line: neighbours within 2px are one edge."""
+    groups = []
+    for b in sorted(bands, key=lambda b: b["x"]):
+        if groups and b["x"] - groups[-1]["x"] <= 2:
+            groups[-1]["bands"].append(b["band"])
+        else:
+            groups.append({"x": b["x"], "bands": [b["band"]]})
+    return groups if len(groups) > 1 else []
+
+
+def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], mobile=False, allow_hosts=(),
+              still=False):
     """A session on `url`, loaded at `width` (desktop by default); Chrome's
-    requests go through a RequestGuard. Raises CDPError when the page does
-    not load."""
+    requests go through a RequestGuard. `still` asks for reduced motion, so
+    a page that animates in is captured finished. Raises CDPError when the
+    page does not load."""
     guard = RequestGuard(allow_hosts=allow_hosts) if browser.needs_guard else None
     s = Session(browser.ws_url, timeout=timeout, on_event=guard)
     try:
@@ -427,6 +460,11 @@ def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], m
         s.call("Page.enable")
         s.call("Emulation.setDeviceMetricsOverride",
                {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": mobile})
+        if still:
+            try:
+                s.call("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]})
+            except CDPError:
+                pass  # a browser without it shoots the page as it moves
         nav = s.call("Page.navigate", {"url": url}, timeout=timeout)
         if nav.get("errorText"):
             raise PageError("%s: %s" % (url, nav["errorText"]))
@@ -486,11 +524,12 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
     CDPError."""
     strip = strip or strip_height(width)
     s = open_page(browser, url, width=width, timeout=timeout, height=height, mobile=mobile,
-                  allow_hosts=allow_hosts)
+                  allow_hosts=allow_hosts, still=True)
     try:
         walk_down(s, timeout)
         page_height = s.evaluate(HEIGHT_JS) or height
         overflow = s.evaluate(OVERFLOW_JS % width)
+        edges = edge_groups(s.evaluate(EDGES_JS) or [])
         plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
         for old in os.listdir(out_dir):     # an earlier run's strips and meta
@@ -513,7 +552,7 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
         overview = capture("overview.png", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
         meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
                 "strips": files, "page": page, "overview": overview, "truncated": truncated,
-                "overflow": overflow, "engine": browser.engine}
+                "overflow": overflow, "edges": edges, "engine": browser.engine}
         with open(os.path.join(out_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
         return meta
