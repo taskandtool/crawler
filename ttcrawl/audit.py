@@ -8,7 +8,7 @@ what a site owner should fix:
     redirect chains (more than one hop) and internal links that redirect
     pages without a title, without a meta description, with no h1 or more than one
     duplicate titles across pages
-    images without alt text, images over 300 KB
+    images without alt text, images over 1.5 MB
     static accessibility: lang and viewport, heading order, empty or generic links and
     buttons, unlabelled form fields, duplicate ids; title and description lengths
     canonical tags pointing at another URL, noindex pages
@@ -38,7 +38,7 @@ from .site import parse_sitemap
 from .structured import jsonld
 
 MAX_HTML = 1_000_000
-MAX_IMAGE = 300_000
+MAX_IMAGE = 1_500_000
 EXTERNAL_LIMIT = 100
 
 
@@ -197,7 +197,7 @@ def audit(start_url, max_pages=200, fetch=net.fetch, check_external=True, invent
         else:
             size = int(headers.get("content-length") or 0) if str(headers.get("content-length") or "").isdigit() else 0
             if (headers.get("content-type") or "").startswith("image/") and size > MAX_IMAGE:
-                issues.append(("heavy image", t, f"{size // 1024} KB; resize or compress it (under {MAX_IMAGE // 1024} KB)"))
+                issues.append(("heavy image", t, f"{size // 1024} KB; resize or compress it (under {MAX_IMAGE / 1_000_000:g} MB)"))
 
     # sitemap drift
     s = urlsplit(start_url)

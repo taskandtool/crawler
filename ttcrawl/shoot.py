@@ -94,8 +94,13 @@ def report(url, results, first_screen):
         else:
             lines.append("%dpx: %s/overview.png, then 01.png … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
                 width, meta["dir"], strips[-1], meta["height"], cut))
+        over = meta.get("overflow")
+        if over:
+            lines.append("%dpx: scrolls sideways by %dpx%s" % (width, over["px"], ", first past the edge: " + over["element"] if over.get("element") else ""))
     if any(m.get("error") for _, m in results):
         nxt = "curl -s -o /dev/null -w '%{http_code}' " + url + ", to see whether the page is served at that path"
+    elif any(m.get("overflow") for _, m in results):
+        nxt = "fix what sticks out past the edge at that width, then shoot again"
     elif any(m.get("overview") for _, m in results):
         nxt = "look at each overview for the page's shape, then its strips in order for the detail"
     else:

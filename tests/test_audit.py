@@ -39,7 +39,7 @@ def fake_fetch(url, cap=0, timeout=0, method="GET"):
     ctype = "text/html" if body.startswith("<html") else ("application/xml" if "urlset" in body else "image/jpeg")
     headers = {"content-type": ctype}
     if key.endswith("huge.jpg"):
-        headers["content-length"] = "900000"
+        headers["content-length"] = "2000000"
     return {"status": status, "final_url": url, "chain": [], "headers": headers, "body": body.encode()}
 
 

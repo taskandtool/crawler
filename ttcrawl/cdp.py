@@ -402,6 +402,17 @@ REVEAL_JS = """(() => { const css = `.elementor-invisible, [data-aos], .wow, .an
   animation: none !important; transition: none !important; }`;
   const el = document.createElement("style"); el.textContent = css; document.head.appendChild(el); })()"""
 HEIGHT_JS = "Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)"
+# How far the page scrolls sideways past the width it was opened at (a
+# phone's innerWidth grows to fit what sticks out), and the first element
+# past that edge (tag.class), or null when it fits.
+OVERFLOW_JS = """(() => {
+  const width = %d;
+  const over = document.documentElement.scrollWidth - width;
+  if (over <= 1) return null;
+  const el = [...document.body.querySelectorAll('*')].find((e) => e.getBoundingClientRect().right > width + 1);
+  const name = el ? el.tagName.toLowerCase() + (el.classList.length ? '.' + [...el.classList].slice(0, 2).join('.') : '') : '';
+  return { px: over, element: name };
+})()"""
 
 
 def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], mobile=False, allow_hosts=()):
@@ -479,6 +490,7 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
     try:
         walk_down(s, timeout)
         page_height = s.evaluate(HEIGHT_JS) or height
+        overflow = s.evaluate(OVERFLOW_JS % width)
         plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
         for old in os.listdir(out_dir):     # an earlier run's strips and meta
@@ -501,7 +513,7 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
         overview = capture("overview.png", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
         meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
                 "strips": files, "page": page, "overview": overview, "truncated": truncated,
-                "engine": browser.engine}
+                "overflow": overflow, "engine": browser.engine}
         with open(os.path.join(out_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
         return meta

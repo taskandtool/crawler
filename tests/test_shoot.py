@@ -60,6 +60,13 @@ class ShootTest(unittest.TestCase):
         self.assertIn("page.png is the whole page for people", text)
         self.assertIn("Next: look at each overview", text)
 
+    def test_a_page_wider_than_the_screen_is_named(self):
+        meta = {"dir": "uploads/home-390", "strips": ["01.png"], "height": 800, "overview": None,
+                "overflow": {"px": 46, "element": "div.gallery"}}
+        _what, lines, nxt = shoot.report("http://localhost:3000/", [(390, meta)], False)
+        self.assertIn("390px: scrolls sideways by 46px, first past the edge: div.gallery", lines)
+        self.assertIn("sticks out past the edge", nxt)
+
     def test_a_failure_says_how_to_check_the_page_is_served(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(fail=True), status=lambda u: 200)
         _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)
