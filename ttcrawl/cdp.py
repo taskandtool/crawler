@@ -465,6 +465,14 @@ def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], m
                 s.call("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]})
             except CDPError:
                 pass  # a browser without it shoots the page as it moves
+        # headless Chrome names itself HeadlessChrome, which bot protection
+        # answers with a check page; it is Chrome, so it says Chrome
+        try:
+            agent = s.call("Browser.getVersion", session=False).get("userAgent", "")
+            if "HeadlessChrome" in agent:
+                s.call("Network.setUserAgentOverride", {"userAgent": agent.replace("HeadlessChrome", "Chrome")})
+        except CDPError:
+            pass  # a browser without them keeps its own name
         nav = s.call("Page.navigate", {"url": url}, timeout=timeout)
         if nav.get("errorText"):
             raise PageError("%s: %s" % (url, nav["errorText"]))

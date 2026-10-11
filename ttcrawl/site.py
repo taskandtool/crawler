@@ -40,7 +40,7 @@ from .say import command as say_command, count, done, fail
 from .blocks import fingerprint, to_markdown
 from .facts import Facts, jsonld_reviews, reviews as page_reviews
 from .furniture import page_furniture, site_furniture
-from .html import parse_page
+from .html import is_bot_check, parse_page
 from .media import MODES, Media, dimensions, extension
 from .media import file_name as image_file_name
 from .styles import merge_styles
@@ -396,6 +396,8 @@ class Crawl:
             html = resp["body"].decode("utf-8", "replace")
         if not html or not html.strip():
             return self.skip(url, "fetch_failed")
+        if is_bot_check(html):
+            return self.skip(url, "bot_check")
         return html, rendered, styles, engine if rendered else "static"
 
     def absorb(self, url, html, rendered=False, styles=None, fetcher="static", from_start=False, front=None):

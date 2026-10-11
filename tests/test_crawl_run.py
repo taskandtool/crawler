@@ -158,6 +158,20 @@ class CrawlRunTests(CrawlHarness):
             with open(os.path.join(out, "_index", "run.json")) as f:
                 self.assertIsNone(json.load(f)["renderer"])
 
+    def test_a_bot_check_is_skipped_not_kept(self):
+        saved = PAGES["https://acme.com/services"]
+        PAGES["https://acme.com/services"] = ("<html><head><title>Checking your browser before accessing. Just a moment..."
+                                              "</title></head><body><h1>Please wait for up to 5 seconds...</h1></body></html>")
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                summary = self.crawl(out)
+                self.assertEqual(summary["pages"], 2)
+                self.assertFalse(os.path.exists(os.path.join(out, "pages", "services.md")))
+                with open(os.path.join(out, "_index", "run.json")) as f:
+                    self.assertEqual(json.load(f)["skipped"], {"bot_check": 1})
+        finally:
+            PAGES["https://acme.com/services"] = saved
+
     def test_throttled_page_is_waited_out(self):
         self.throttle_left["https://acme.com/services"] = 2
         with tempfile.TemporaryDirectory() as out:
@@ -559,6 +573,39 @@ class CDPTests(unittest.TestCase):
         with self.assertRaises(cdp.PageError):
             cdp.render(browser, "https://a.com/")
         self.assertEqual((fake.closed, fake2.closed), ([True], [True]))
+
+    def test_chrome_says_chrome(self):
+        calls = []
+
+        class FakeSession:
+            def __init__(self, ws_url, timeout=60, on_event=None):
+                pass
+
+            def call(self, method, params=None, session=True, timeout=60):
+                calls.append((method, params))
+                if method == "Browser.getVersion":
+                    return {"userAgent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 HeadlessChrome/154.0.0.0 Safari/537.36"}
+                return {"frameId": "1"} if method == "Page.navigate" else {}
+
+            def wait_event(self, name, timeout=30):
+                return {}
+
+            def close(self):
+                pass
+        with mock.patch.object(cdp, "Session", FakeSession):
+            cdp.open_page(type("B", (), {"ws_url": "ws://x", "needs_guard": False})(), "https://a.com/")
+        agent = next(p["userAgent"] for m, p in calls if m == "Network.setUserAgentOverride")
+        self.assertEqual(agent, "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/154.0.0.0 Safari/537.36")
+        methods = [m for m, _ in calls]
+        self.assertLess(methods.index("Network.setUserAgentOverride"), methods.index("Page.navigate"))
+
+    def test_a_bot_check_is_known_by_its_title_alone(self):
+        from ttcrawl.html import is_bot_check
+        for title in ("Just a moment...", "Checking your browser before accessing. Just a moment...",
+                      "Attention Required! | Cloudflare"):
+            self.assertTrue(is_bot_check("<html><head><title>%s</title></head></html>" % title), title)
+        for title in ("Just a moment with our founder", "Attention required: recall notice", ""):
+            self.assertFalse(is_bot_check("<html><head><title>%s</title></head><p>Just a moment...</p></html>" % title), title)
 
     def test_a_session_that_cannot_attach_closes_what_it_opened(self):
         sent, closed = [], []

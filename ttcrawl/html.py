@@ -49,6 +49,11 @@ LEGAL_RE = re.compile(r"privacy|terms|conditions|cookie|legal|refund|returns?\b|
 CTA_RE = re.compile(r"\b(call|book|quote|estimate|contact|get started|schedule|appointment|order|buy|apply|sign up|enquire|inquire|request)\b", re.I)
 BADGE_RE = re.compile(r"badge|award|accredit|certif|partner|bbb|rating|guarantee|seal|trust|payment|visa|mastercard|licen[cs]ed|insured|member", re.I)
 COPYRIGHT_RE = re.compile(r"©|\(c\)|copyright|all rights reserved", re.I)
+# The titles of the pages bot protection shows in place of a site's own
+# (Cloudflare, Hostinger and the like); never the site's content.
+BOT_CHECK_RE = re.compile(r"^\s*(just a moment\.\.\.\s*$|checking your browser before|attention required! \| cloudflare"
+                          r"|verify you are human)", re.I)
+TITLE_RE = re.compile(r"<title[^>]*>([^<]*)", re.I)
 
 
 class PageParser(HTMLParser):
@@ -466,6 +471,12 @@ def _squash_lines(text):
     """_squash, keeping the line breaks a <br> made (an address, a list of hours)."""
     lines = [_squash(line) for line in (text or "").split("\n")]
     return "\n".join(line for line in lines if line)
+
+
+def is_bot_check(html):
+    """The page is a bot check, not the site's page."""
+    m = TITLE_RE.search(html or "")
+    return bool(m and BOT_CHECK_RE.search(m.group(1)))
 
 
 def parse_page(html, url):

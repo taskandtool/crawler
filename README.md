@@ -146,6 +146,9 @@ both for this user.
   never less than 5, 10, 20, 40 seconds) and retried up to four times, and
   the rest of the run slows down. The status is asked before a page is
   rendered, so a redirect, an error or a throttled answer costs no render.
+- Chrome calls itself Chrome, not HeadlessChrome, which bot protection
+  answers with a check page. A page that is still only a bot check ("Just a
+  moment...") is skipped as `bot_check`, never kept as the site's.
 
 ## Developing
 
