@@ -65,7 +65,7 @@ def run(args):
         paths.register_site(args.from_dir, {"docs_fetched": True, "docs": 0})
         done(args, {"documents": 0, "note": "no documents linked from %s" % args.from_dir},
              "no documents linked from the pages in %s" % args.from_dir,
-             next="read %s/_index/facts.json, then the pages" % args.from_dir)
+             next="read %s/_index/business-card.json, then the pages" % args.from_dir)
         return 0
     root_host = None
     try:

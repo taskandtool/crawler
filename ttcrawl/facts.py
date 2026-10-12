@@ -3,7 +3,8 @@ records, and the contact facts (phones, emails, addresses, hours, social
 profiles, the action links: book, quote, order).
 
 What is recorded is what the site states, verbatim; nothing is derived, and
-where two pages disagree both values are kept for the owner to settle.
+where two pages disagree both values are kept for the owner to settle (the
+business card, card.py, holds them in standard forms).
 Contact facts come only from structured data, the site's header and footer,
 and its own home, contact, about and location pages: never from a review, a
 comment, or a post, where a customer's phone number or a supplier's address
@@ -26,8 +27,10 @@ EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 ADDRESS_RE = re.compile(r"\b\d{1,6}\s+[A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,5}\s+(?:Rd|Road|St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|"
                         r"Way|Lane|Ln|Ct|Court|Pl|Place|Hwy|Highway|Pkwy|Parkway|Terrace|Ter|Circle|Cir)\.?,?\s+[A-Z][\w.' -]+,?\s+"
                         r"[A-Z]{2}\s+\d{5}(?:-\d{4})?")
+# a day or a run of days, then its times or "closed"
 HOURS_RE = re.compile(r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\.?(?:\s*(?:-|–|to|through)\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\.?)?"
-                      r"[:,]?\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?", re.I)
+                      r"[:,]?\s*(?:\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*"
+                      r"(?:am|pm|a\.m\.|p\.m\.)?|closed\b)", re.I)
 OWN_PAGE_RE = re.compile(r"contact|about|team|staff|location|find-us|visit|hours|directions|our-story|who-we-are|company", re.I)
 BOOKING_HOST_RE = re.compile(r"(^|\.)(opentable\.[a-z.]+|resy\.com|exploretock\.com|sevenrooms\.com|calendly\.com|acuityscheduling\.com|"
                              r"squareup\.com|square\.site|toasttab\.com|housecallpro\.com|getjobber\.com|jobber\.com|servicetitan\.com|"

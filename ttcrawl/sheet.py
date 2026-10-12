@@ -3,18 +3,23 @@ model names them all in one look (a site's logos, say) instead of opening
 each file. Drawn by the browser from the files themselves, inlined: no
 server and no image library.
 
-    tt-crawl sheet static/images/logos/*.png --out raw/logos.png
+    tt-crawl sheet logos/*.png --out logos.png
+    tt-crawl sheet --from raw/site/example.com            # the business card's photographs
+    tt-crawl sheet --from raw/site/example.com --marks    # others' logos the crawl kept
 """
 import argparse
 import base64
 import html
+import json
 import mimetypes
 import os
 
-from . import cdp, chrome
+from . import card, cdp, chrome
 from .say import command, done, fail
 
 COLUMNS, CELL_W, CELL_H = 4, 260, 150
+# photographs want bigger cells, fewer to a row
+PHOTO_COLUMNS, PHOTO_CELL = 3, (380, 300)
 
 
 def page(paths, columns=COLUMNS, cell=(CELL_W, CELL_H)):
@@ -58,17 +63,48 @@ def draw(browser, paths, out, columns=COLUMNS, cell=(CELL_W, CELL_H), timeout=45
     return {"out": out, "pictures": len(paths), "width": width, "height": height}
 
 
+def from_crawl(folder, marks):
+    """The pictures a crawl folder offers, in order: the business card's
+    photographs, or with `marks` the others' logos the crawl kept."""
+    if not marks:
+        return [os.path.join(folder, p["file"]) for p in card.build(folder)["photos"]]
+    try:
+        with open(os.path.join(folder, "_index", "media.json")) as f:
+            media = json.load(f)
+    except (OSError, ValueError):
+        media = []
+    return [os.path.join(folder, "images", it["file"]) for it in media if it.get("kind") == "mark" and it.get("file")]
+
+
 def run(args):
-    paths = [p for p in args.pictures if os.path.isfile(p)]
-    missing = [p for p in args.pictures if not os.path.isfile(p)]
+    if bool(args.pictures) == bool(args.from_):
+        return fail(args, 2, "name the pictures, or a crawl folder with --from (one or the other)",
+                    "tt-crawl sheet --from raw/site/<host>, or tt-crawl sheet a.png b.png --out sheet.png")
+    if args.marks and not args.from_:
+        return fail(args, 2, "--marks reads a crawl folder: give it --from", "tt-crawl sheet --from raw/site/<host> --marks")
+    if args.from_ and not os.path.isdir(os.path.join(args.from_, "_index")):
+        return fail(args, 2, "no crawl at %s (no _index/ in it)" % args.from_,
+                    "ls raw/site/, then tt-crawl sheet --from raw/site/<host>")
+    photos = bool(args.from_) and not args.marks
+    pictures = from_crawl(args.from_, args.marks) if args.from_ else args.pictures
+    out = args.out or (os.path.join(args.from_, "_index", "marks.png" if args.marks else "photos.png")
+                       if args.from_ else "sheet.png")
+    columns = args.columns or (PHOTO_COLUMNS if photos else COLUMNS)
+    size = args.cell or (PHOTO_CELL if photos else (CELL_W, CELL_H))
+    paths = [p for p in pictures if os.path.isfile(p)]
+    missing = [p for p in pictures if not os.path.isfile(p)]
     if not paths:
+        if args.from_:
+            what = "others' logos" if args.marks else "photographs %dpx wide or more" % card.PHOTO_MIN_WIDTH
+            return fail(args, 1, "%s holds no %s" % (args.from_, what),
+                        "ls %s/images/, or tt-crawl brand <url> --resume to read more pages" % args.from_)
         return fail(args, 2, "no pictures to draw: not found: %s" % ", ".join(missing),
-                    "tt-crawl sheet static/images/logos/*.png --out raw/logos.png")
+                    "tt-crawl sheet logos/*.png --out logos.png")
     driver, note = chrome.driver()
     if driver is None:
         return fail(args, 1, note or "no browser on this machine", "tt-crawl setup, then this command again")
     try:
-        result = driver._use(lambda b: draw(b, paths, args.out, args.columns, args.cell))
+        result = driver._use(lambda b: draw(b, paths, out, columns, size))
     except cdp.CDPError as e:
         return fail(args, 1, "the browser failed: %s" % str(e).split("\n")[0][:300],
                     "the same command again; tt-crawl setup when it fails twice")
@@ -78,7 +114,7 @@ def run(args):
     lines = ["%d  %s" % (i, p) for i, p in enumerate(paths, 1)]
     if missing:
         lines.append("left alone, not found: %s" % ", ".join(missing))
-    done(args, result, "%s (%d pictures, numbered in this order)" % (args.out, len(paths)), lines,
+    done(args, result, "%s (%d pictures, numbered in this order)" % (out, len(paths)), lines,
          "look at the sheet once and name each picture by its number")
     return 0
 
@@ -98,9 +134,15 @@ def add_parser(sub):
     p = command(sub, "sheet", "several pictures as one numbered contact sheet, to name them in one look",
                 "Prints where the sheet went and each picture's number, then Next:. A refusal goes to stderr with a "
                 "Try: line.")
-    p.add_argument("pictures", nargs="+", help="image files")
-    p.add_argument("--out", default="sheet.png", help="where the sheet goes (default sheet.png)")
-    p.add_argument("--columns", type=int, default=COLUMNS, help="pictures a row (default %d)" % COLUMNS)
-    p.add_argument("--cell", type=cell, default=(CELL_W, CELL_H),
-                   help="each cell's size in pixels, WxH (default %dx%d; 380x300 suits photographs)" % (CELL_W, CELL_H))
+    p.add_argument("pictures", nargs="*", help="image files (or --from)")
+    p.add_argument("--from", dest="from_", default="", metavar="FOLDER",
+                   help="a crawl folder: its business card's photographs (%dpx wide or more, widest first, %d at most), "
+                        "drawn to <folder>/_index/photos.png" % (card.PHOTO_MIN_WIDTH, card.PHOTOS_KEPT))
+    p.add_argument("--marks", action="store_true", help="with --from: others' logos instead, to _index/marks.png")
+    p.add_argument("--out", default="", help="where the sheet goes (default sheet.png, or into the crawl folder with --from)")
+    p.add_argument("--columns", type=int, default=0,
+                   help="pictures a row (default %d; %d for photographs)" % (COLUMNS, PHOTO_COLUMNS))
+    p.add_argument("--cell", type=cell, default=None,
+                   help="each cell's size in pixels, WxH (default %dx%d; %dx%d for photographs)"
+                        % (CELL_W, CELL_H, *PHOTO_CELL))
     p.set_defaults(func=run)

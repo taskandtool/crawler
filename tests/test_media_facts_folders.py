@@ -126,6 +126,12 @@ class FactsTests(unittest.TestCase):
         self.assertIn("12 Main St, Leeds, AL 35094", [a["value"] for a in out["address"]])
         self.assertEqual([h["value"] for h in out["hours"]], ["Mon-Fri 8am-5pm"])
 
+    def test_a_closed_day_is_recorded_as_stated(self):
+        f = Facts()
+        home = parse_page("<body><footer><p>Monday: 7am – 3pm</p><p>Sunday: CLOSED</p></footer></body>", "https://acme.com/")
+        f.from_page("https://acme.com/", "/", home["blocks"], home["links"], set())
+        self.assertEqual(sorted(h["value"] for h in f.to_json()["hours"]), ["Monday: 7am – 3pm", "Sunday: CLOSED"])
+
     def test_phones_and_actions(self):
         self.assertEqual(phones("Call (941) 473-1566 or 941.473.1566 or 1-941-473-1566"), ["(941) 473-1566"])
         self.assertEqual(action_score("https://calendly.com/acme/visit", "Visit"), 2)
@@ -201,7 +207,7 @@ class CrawlFolderTests(unittest.TestCase):
             summary = self.crawl(out)
             self.assertEqual(sorted(os.listdir(os.path.join(out, "pages"))), ["about.md", "contact.md", "index.md", "team.md"])
             for name in ("inventory.json", "templates.md", "run.json", "manifest.json", "media.json", "facts.json",
-                         "reviews.md", "furniture.json"):
+                         "reviews.md", "furniture.json", "business-card.json"):
                 self.assertTrue(os.path.isfile(os.path.join(out, "_index", name)), name)
             self.assertTrue(os.path.isfile(os.path.join(out, "structured", "index.json")))
             # the crew photo, shown at two sizes on two pages: fetched once, at its largest, linked from both
@@ -221,6 +227,10 @@ class CrawlFolderTests(unittest.TestCase):
             with open(os.path.join(out, "_index", "facts.json")) as f:
                 facts = json.load(f)
             self.assertEqual([p["value"] for p in facts["phone"]], ["555-123-4567"])
+            with open(os.path.join(out, "_index", "business-card.json")) as f:
+                business = json.load(f)
+            self.assertEqual(business["telephone"], "555-123-4567")
+            self.assertEqual(business["photos"][0]["file"], "images/" + crew["file"])
             self.assertEqual(summary["images"], len(os.listdir(os.path.join(out, "images"))))
             # a second run fetches no picture again
             self.fetched_images.clear()

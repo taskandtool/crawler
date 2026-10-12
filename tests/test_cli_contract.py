@@ -115,6 +115,23 @@ class Contract(unittest.TestCase):
         self.assertEqual((code, out), (2, ""))
         self.assertIn("tt-crawl audit: cannot read inv.json", err)
 
+    def test_sheet_takes_pictures_or_a_crawl_folder_never_both_or_neither(self):
+        with tempfile.TemporaryDirectory() as root:
+            open(os.path.join(root, "a.png"), "wb").close()
+            os.makedirs(os.path.join(root, "raw", "site", "acme.com", "_index"))
+            for argv, said in ((["a.png", "--from", "raw/site/acme.com"], "one or the other"), ([], "one or the other"),
+                               (["a.png", "--marks"], "--marks reads a crawl folder"),
+                               (["--from", "raw/site/nothere"], "no crawl at raw/site/nothere")):
+                with self.subTest(argv=argv), mock.patch.object(chrome, "driver") as driver:
+                    code, out, err = self.run_in(root, "sheet", *argv)
+                    self.assertEqual((code, out), (2, ""))
+                    self.assertIn(said, err)
+                    self.assertIn("Try:", err)
+                    driver.assert_not_called()
+            code, out, err = self.run_in(root, "sheet", "--from", "raw/site/acme.com")
+            self.assertEqual((code, out), (1, ""))
+            self.assertIn("holds no photographs 800px wide or more", err)
+
     def test_a_bad_cell_is_refused_before_a_browser_starts(self):
         with tempfile.TemporaryDirectory() as root:
             open(os.path.join(root, "a.png"), "wb").close()

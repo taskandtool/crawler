@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
-from . import __version__, chrome, dom, inventory, net, paths, structured
+from . import __version__, card, chrome, dom, inventory, net, paths, structured
 from .say import command as say_command, count, done, fail
 from .blocks import fingerprint, to_markdown
 from .facts import Facts, jsonld_reviews, reviews as page_reviews
@@ -58,6 +58,9 @@ STYLE_PAGES = 5
 BRAND_SHOT_PAGES = 5
 DELAY_S = 0.5                # seconds between two rounds of pages; doubles when a site throttles
 MAX_DELAY_S = 8
+# How the crawl summary counts each kind of fact ("2 addresses", "7 hours lines").
+FACT_WORDS = {"address": ("address", "addresses"), "hours": ("hours line",), "social": ("social profile",),
+              "action": ("action link",)}
 STATE_EVERY = 10             # pages between two saves of the crawl's place
 # Pages read at once, each in its own browser: most of a crawl is the browser
 # rendering, and three in flight cut a 24-page read by more than half without
@@ -657,6 +660,7 @@ class Crawl:
         _dump(paths.index(out, "manifest.json"), manifest)
         inventory.write(self.records, os.path.join(out, paths.INDEX), self.start,
                         {"limit": limit, "limit_reached": self.limit_reached, "renderer": self.renderer})
+        card.write(out)
         self.save_state()
 
         not_fetched = {t["template"]: t["not_read"] for t in templates if t["not_read"]}
@@ -722,7 +726,8 @@ class Crawl:
         lines = []
         if args.command in ("add", "import"):
             lines.append("%s in the folder (%s)%s" % (count(s["pages"], "page"), changes or "none", limit))
-        lines.append("%s/pages/: the pages; %s/_index/: inventory, templates, facts, media, manifest" % (out, out))
+        lines.append("%s/pages/: the pages; %s/_index/: inventory, templates, facts, the business card, media, manifest"
+                     % (out, out))
         lines.append("%s found on the site, %d not read%s" % (
             count(s["discovered"], "URL"), s["unread"],
             "; --resume with a higher --max-pages reads on" if s["limit_reached"] else ""))
@@ -733,7 +738,7 @@ class Crawl:
         if s["styles_pages"]:
             pictures += "; styles from %s in %s/_index/styles.json" % (count(s["styles_pages"], "page"), out)
         lines.append(pictures)
-        facts = ", ".join(count(n, k) for k, n in s["facts"].items() if n)
+        facts = ", ".join(count(n, *FACT_WORDS.get(k, (k,))) for k, n in s["facts"].items() if n)
         lines.append("facts: %s; %s; %s (%s/_index/facts.json)" % (
             facts or "none found", count(s["reviews"], "review"),
             "business markup found" if s["business_markup"] else "no business markup", out))
@@ -768,7 +773,7 @@ class Crawl:
         elif s["documents"]:
             nxt = "tt-crawl docs --from %s, for the documents the pages link to" % out
         else:
-            nxt = "read %s/_index/facts.json, then the pages" % out
+            nxt = "read %s/_index/business-card.json, then the pages" % out
         return what, lines, nxt
 
     def fetch_images(self, media):

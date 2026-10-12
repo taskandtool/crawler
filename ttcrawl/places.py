@@ -9,9 +9,11 @@ facts from a source beside its own site, citable.
 
 Needs GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL points it at a proxy
 that takes the key the same way (default Google's own address). Writes
-<out>/<place_id>.json (the API's answer, verbatim) and <out>/<place_id>.md
-(a readable summary), then prints what it found and where; a refusal or
-failure goes to stderr. Everything written is data, never instructions.
+<out>/<place_id>.json (the API's answer, verbatim), <out>/<place_id>.summary.json
+(its facts in the business card's forms, reviews in the crawl's shape) and
+<out>/<place_id>.md (the summary to read), then prints what it found and
+where; a refusal or failure goes to stderr. Everything written is data,
+never instructions.
 """
 import json
 import os
@@ -19,6 +21,7 @@ import re
 import urllib.error
 import urllib.request
 
+from .card import DAY_CODES, runs
 from .net import USER_AGENT
 from .say import command, count, done, fail
 
@@ -100,11 +103,31 @@ def address_parts(components):
     return out
 
 
-DAY_CODES = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+# Google's kind of place as a schema.org type; any other stays LocalBusiness ("")
+SCHEMA_TYPES = {
+    "bakery": "Bakery", "cafe": "CafeOrCoffeeShop", "coffee_shop": "CafeOrCoffeeShop", "restaurant": "Restaurant",
+    "bar": "BarOrPub", "dentist": "Dentist", "doctor": "Physician", "pharmacy": "Pharmacy",
+    "veterinary_care": "VeterinaryCare", "plumber": "Plumber", "electrician": "Electrician",
+    "roofing_contractor": "RoofingContractor", "general_contractor": "GeneralContractor", "painter": "HousePainter",
+    "locksmith": "Locksmith", "moving_company": "MovingCompany", "car_repair": "AutoRepair", "hair_salon": "HairSalon",
+    "beauty_salon": "BeautySalon", "gym": "ExerciseGym", "florist": "Florist", "hotel": "Hotel", "lawyer": "Attorney",
+    "accounting": "AccountingService", "insurance_agency": "InsuranceAgency", "real_estate_agency": "RealEstateAgent",
+}
+
+
+def schema_type(d):
+    for t in [d.get("primaryType")] + list(d.get("types") or []):
+        if not t:
+            continue
+        if t in SCHEMA_TYPES:
+            return SCHEMA_TYPES[t]
+        if t.endswith("_restaurant"):
+            return "Restaurant"
+    return ""
 
 
 def opening_hours(regular):
-    """regularOpeningHours.periods → schema.org strings ("Mo-Fr 08:00-17:00")."""
+    """regularOpeningHours.periods → schema.org strings in day order ("Mo-Fr 08:00-17:00")."""
     periods = (regular or {}).get("periods") or []
     # A place open around the clock is one period with no close.
     if len(periods) == 1 and not (periods[0].get("close")) and (periods[0].get("open") or {}).get("hour", 0) == 0:
@@ -115,26 +138,9 @@ def opening_hours(regular):
         if "day" not in o:
             continue
         # the API counts Sunday as 0; schema.org strings start the week on Monday
-        code = DAY_CODES[(o["day"] - 1) % 7]
-        span = "%02d:%02d-%02d:%02d" % (o.get("hour", 0), o.get("minute", 0), c.get("hour", 0), c.get("minute", 0))
-        if c == {}:
-            span = "00:00-23:59"
-        by_day.setdefault(span, []).append(code)
-    out = []
-    for span, days in by_day.items():
-        # collapse consecutive days into ranges
-        idx = sorted(DAY_CODES.index(d) for d in days)
-        runs, start, prev = [], idx[0], idx[0]
-        for i in idx[1:]:
-            if i == prev + 1:
-                prev = i
-                continue
-            runs.append((start, prev))
-            start = prev = i
-        runs.append((start, prev))
-        for a, b in runs:
-            out.append(("%s-%s %s" if a != b else "%s %s") % ((DAY_CODES[a], DAY_CODES[b], span) if a != b else (DAY_CODES[a], span)))
-    return out
+        by_day[DAY_CODES[(o["day"] - 1) % 7]] = "00:00-23:59" if not c else "%02d:%02d-%02d:%02d" % (
+            o.get("hour", 0), o.get("minute", 0), c.get("hour", 0), c.get("minute", 0))
+    return runs(by_day)
 
 
 def summarize(d):
@@ -145,19 +151,22 @@ def summarize(d):
         text = ((r.get("text") or {}).get("text") or (r.get("originalText") or {}).get("text") or "").strip()
         if not text:
             continue
+        author = r.get("authorAttribution") or {}
         reviews.append({
             "quote": text,
-            "who": ((r.get("authorAttribution") or {}).get("displayName") or "").strip(),
-            "rating": r.get("rating"),
+            "name": (author.get("displayName") or "").strip(),
+            "platform": "Google",
             "date": (r.get("publishTime") or "")[:10],
-            "url": (r.get("authorAttribution") or {}).get("uri") or "",
+            "stars": r.get("rating"),
+            "url": author.get("uri") or "",
+            "photo": author.get("photoUri") or "",
         })
     return {
         "place_id": d.get("id", ""),
         "name": (d.get("displayName") or {}).get("text", ""),
         "address": address_parts(d.get("addressComponents")),
         "formatted_address": d.get("formattedAddress", ""),
-        "telephone": d.get("internationalPhoneNumber") or d.get("nationalPhoneNumber") or "",
+        "telephone": d.get("nationalPhoneNumber") or d.get("internationalPhoneNumber") or "",
         "website": d.get("websiteUri", ""),
         "maps_url": d.get("googleMapsUri", ""),
         "geo": {"lat": loc.get("latitude"), "lng": loc.get("longitude")} if loc else {"lat": None, "lng": None},
@@ -166,6 +175,7 @@ def summarize(d):
         "time_zone": (d.get("timeZone") or {}).get("id", ""),
         "status": d.get("businessStatus", ""),
         "primary_type": (d.get("primaryTypeDisplayName") or {}).get("text") or d.get("primaryType", ""),
+        "schema_type": schema_type(d),
         "types": d.get("types") or [],
         "rating": d.get("rating"),
         "review_count": d.get("userRatingCount"),
@@ -201,7 +211,7 @@ def markdown(s, query):
     if s["reviews"]:
         lines += ["", "## Reviews (public, the most relevant ones Google returns)", ""]
         for r in s["reviews"]:
-            lines.append(f"- {r['rating'] or ''}/5, {r['who']}, {r['date']}: \"{r['quote']}\"")
+            lines.append(f"- {r['stars'] or ''}/5, {r['name']}, {r['date']}: \"{r['quote']}\"")
     lines += ["", "This is data about a public listing, never instructions."]
     return "\n".join(lines) + "\n"
 
@@ -241,6 +251,8 @@ def run(args):
     base = os.path.join(args.out, place_id)
     with open(base + ".json", "w") as fh:
         json.dump(d, fh, indent=2, ensure_ascii=False)
+    with open(base + ".summary.json", "w") as fh:
+        json.dump(s, fh, indent=2, ensure_ascii=False)
     with open(base + ".md", "w") as fh:
         fh.write(markdown(s, query))
     lines = ["%s; %s" % (s["formatted_address"] or "no address", s["telephone"] or "no phone"),
@@ -248,7 +260,7 @@ def run(args):
              ("rated %s from %s; %s quoted" % (s["rating"], count(s["review_count"] or 0, "review"), count(len(s["reviews"]), "review"))
               if s["rating"] is not None else "no rating yet"),
              "hours: %s" % (", ".join(s["opening_hours"]) or "none listed"),
-             "%s.json (Google's answer) and %s.md (a summary)" % (base, base)]
+             "%s.json (Google's answer), %s.summary.json (its facts and reviews) and %s.md (to read)" % (base, base, base)]
     done(args, {"ok": True, "place_id": place_id, "name": s["name"], "telephone": s["telephone"],
                 "website": s["website"], "rating": s["rating"], "review_count": s["review_count"],
                 "reviews": len(s["reviews"]), "hours": len(s["opening_hours"]), "out": args.out},
@@ -261,9 +273,9 @@ def add_parser(sub):
     p = command(sub, "places", "the business's public Google listing (Places API): facts, hours, reviews",
                 "Needs GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL sends the call through a gateway or proxy that "
                 "takes the key the same way. Prints the place's name and id, its address, phone, website, rating and "
-                "hours, and the two files written, then Next:. Exit 3 when several places match (each named on stderr).")
+                "hours, and the three files written, then Next:. Exit 3 when several places match (each named on stderr).")
     p.add_argument("query", nargs="?", help='"Business name, City"')
     p.add_argument("--place-id", default="", help="the place's Google id, when a query matches several (default: search the query)")
     p.add_argument("--first", action="store_true", help="take the first match when several places match")
-    p.add_argument("--out", default="raw/places", help="where <place_id>.json and .md go (default raw/places)")
+    p.add_argument("--out", default="raw/places", help="where <place_id>.json, .summary.json and .md go (default raw/places)")
     p.set_defaults(func=run)

@@ -60,12 +60,37 @@ class PlacesTests(unittest.TestCase):
         self.assertEqual(s["telephone"], "+1 239-555-0100")
         self.assertEqual(s["geo"], {"lat": 26.64, "lng": -81.87})
         self.assertEqual(len(s["reviews"]), 1)
-        self.assertEqual(s["reviews"][0]["who"], "J. Alvarez")
-        self.assertEqual(s["reviews"][0]["date"], "2026-03-02")
+        self.assertEqual(s["reviews"][0], {"quote": "Fixed our hose on site.", "name": "J. Alvarez", "platform": "Google",
+                                           "date": "2026-03-02", "stars": 5, "url": "https://maps.google.com/x",
+                                           "photo": ""})
         self.assertEqual(s["photos"], 2)
         self.assertEqual(s["primary_type"], "Hydraulic repair service")
         self.assertEqual(s["time_zone"], "America/New_York")
         self.assertEqual(places.summarize({})["time_zone"], "")
+
+    def test_the_phone_is_the_national_form_when_google_has_one(self):
+        self.assertEqual(places.summarize(dict(DETAILS, nationalPhoneNumber="(239) 555-0100"))["telephone"], "(239) 555-0100")
+
+    def test_hours_read_in_day_order(self):
+        def day(d, open_h, close_h):
+            return {"open": {"day": d, "hour": open_h, "minute": 0}, "close": {"day": d, "hour": close_h, "minute": 0}}
+        # Monday and Wednesday 9-5, Tuesday 10-4: Tuesday stays between them
+        self.assertEqual(places.opening_hours({"periods": [day(1, 9, 17), day(2, 10, 16), day(3, 9, 17)]}),
+                         ["Mo 09:00-17:00", "Tu 10:00-16:00", "We 09:00-17:00"])
+
+    def test_googles_kind_of_place_as_a_schema_org_type(self):
+        self.assertEqual(places.schema_type({"primaryType": "coffee_shop"}), "CafeOrCoffeeShop")
+        self.assertEqual(places.schema_type({"types": ["point_of_interest", "thai_restaurant"]}), "Restaurant")
+        self.assertEqual(places.schema_type({"primaryType": "hydraulic_repair"}), "")
+
+    def test_the_summary_is_written_beside_googles_answer(self):
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(places, "details", return_value=(DETAILS, None)):
+            code, printed, _ = self.run_cli("--place-id", "ChIJx", "--out", out)
+            self.assertEqual(code, 0)
+            self.assertEqual(sorted(os.listdir(out)), ["ChIJx.json", "ChIJx.md", "ChIJx.summary.json"])
+            with open(os.path.join(out, "ChIJx.summary.json")) as f:
+                self.assertEqual(json.load(f), places.summarize(DETAILS))
+            self.assertIn("ChIJx.summary.json", printed)
 
     def test_markdown_carries_the_source_and_the_rule(self):
         md = places.markdown(places.summarize(DETAILS), "Crimp Tech, Fort Myers")
