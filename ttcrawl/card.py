@@ -9,6 +9,7 @@ words as the site wrote them.
 import json
 import os
 import re
+from urllib.parse import urlsplit
 
 from . import paths
 
@@ -111,6 +112,18 @@ def time_zone(address):
     return COUNTRY_ONE_ZONE.get(country.upper(), "")
 
 
+def profiles(urls):
+    """Each profile once: http and https, www or not, a trailing slash or a
+    capital are the same page; the https form is kept, in first-seen order."""
+    kept = {}
+    for u in urls:
+        s = urlsplit(u)
+        key = ((s.hostname or "").lower().removeprefix("www."), s.path.rstrip("/").lower())
+        if key not in kept or (kept[key].startswith("http:") and u.startswith("https:")):
+            kept[key] = u
+    return list(kept.values())
+
+
 def build(out):
     """The card for the crawl folder `out`, from its _index/ and structured/ files."""
     def read(rel, fallback):
@@ -161,9 +174,9 @@ def build(out):
     if zone:
         sources["time_zone"] = sources["address"]
     same_raw = markup.get("sameAs")
-    same_as = put("same_as", list(dict.fromkeys(
+    same_as = put("same_as", profiles(
         [r["value"] for r in facts.get("social") or []]
-        + [s for s in (same_raw if isinstance(same_raw, list) else [same_raw]) if isinstance(s, str) and s])), facts_file)
+        + [s for s in (same_raw if isinstance(same_raw, list) else [same_raw]) if isinstance(s, str) and s]), facts_file)
     description = (put("description", text(markup.get("description")), markup_file)
                    or put("description", home.get("meta_description") or "", inventory_file))
 

@@ -63,6 +63,14 @@ class AddressTest(unittest.TestCase):
         self.assertEqual(card.time_zone(None), "")
 
 
+class ProfilesTest(unittest.TestCase):
+    def test_each_profile_once_in_its_https_form(self):
+        self.assertEqual(card.profiles(["http://facebook.com/CedarFoxCoffee", "http://instagram.com/cedarfoxcoffee",
+                                        "https://www.facebook.com/CedarFoxCoffee/", "https://www.instagram.com/cmill31"]),
+                         ["https://www.facebook.com/CedarFoxCoffee/", "http://instagram.com/cedarfoxcoffee",
+                          "https://www.instagram.com/cmill31"])
+
+
 class BuildTest(unittest.TestCase):
     def test_the_card_from_a_crawl_folder(self):
         with tempfile.TemporaryDirectory() as root:
