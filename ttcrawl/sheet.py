@@ -95,7 +95,7 @@ def run(args):
     missing = [p for p in pictures if not os.path.isfile(p)]
     if not paths:
         if args.from_:
-            what = "others' logos" if args.marks else "photographs %dpx wide or more" % card.PHOTO_MIN_WIDTH
+            what = "others' logos" if args.marks else "photographs"
             return fail(args, 1, "%s holds no %s" % (args.from_, what),
                         "ls %s/images/, or tt-crawl brand <url> --resume to read more pages" % args.from_)
         return fail(args, 2, "no pictures to draw: not found: %s" % ", ".join(missing),
@@ -136,8 +136,8 @@ def add_parser(sub):
                 "Try: line.")
     p.add_argument("pictures", nargs="*", help="image files (or --from)")
     p.add_argument("--from", dest="from_", default="", metavar="FOLDER",
-                   help="a crawl folder: its business card's photographs (%dpx wide or more, widest first, %d at most), "
-                        "drawn to <folder>/_index/photos.png" % (card.PHOTO_MIN_WIDTH, card.PHOTOS_KEPT))
+                   help="a crawl folder: its business card's photographs (widest first, %d at most), "
+                        "drawn to <folder>/_index/photos.png" % card.PHOTOS_KEPT)
     p.add_argument("--marks", action="store_true", help="with --from: others' logos instead, to _index/marks.png")
     p.add_argument("--out", default="", help="where the sheet goes (default sheet.png, or into the crawl folder with --from)")
     p.add_argument("--columns", type=int, default=0,

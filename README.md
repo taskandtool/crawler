@@ -96,7 +96,7 @@ raw/site/<host>/            the site (www. dropped); raw/external/<host>/ for so
     media.json              every picture: its file, real size, kind, and each page it sat on
     facts.json              phones, emails, addresses, hours, social, action links, each with its source
     business-card.json      the business's name, contact, address in parts, schema.org hours, time zone,
-                            description, logo and photographs 800px wide or more, each naming its file
+                            description, logo and photographs (widest first), each naming its file
     reviews.json/.md        reviews verbatim with name, date, platform and page
     furniture.json          the header and footer as structure: nav tree, footer groups, logo
     common.md               the lines left out of every page because they repeat on most of them

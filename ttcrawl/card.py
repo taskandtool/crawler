@@ -14,7 +14,6 @@ from urllib.parse import urlsplit
 from . import paths
 
 FILE = "business-card.json"
-PHOTO_MIN_WIDTH = 800
 PHOTOS_KEPT = 16
 
 # Only where the region or country has one zone: anywhere else the card
@@ -187,8 +186,7 @@ def build(out):
         return {"file": "images/" + it["file"], "width": it.get("width"), "height": it.get("height")}
 
     logos = sorted((it for it in media if it.get("kind") == "logo" and on_disk(it)), key=lambda it: -(it.get("width") or 0))
-    photos = sorted((it for it in media if it.get("kind") == "photo" and on_disk(it)
-                     and (it.get("width") or 0) >= PHOTO_MIN_WIDTH), key=lambda it: -(it.get("width") or 0))
+    photos = sorted((it for it in media if it.get("kind") == "photo" and on_disk(it)), key=lambda it: -(it.get("width") or 0))
     if logos:
         sources["logo"] = media_file
     if photos:

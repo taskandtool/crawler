@@ -98,9 +98,10 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(c["same_as"], ["https://instagram.com/acme", "https://facebook.com/acme"])
         self.assertEqual(c["description"], "Coffee.")
         self.assertEqual(c["logo"], {"file": "images/big.png", "width": 1200, "height": 480})
-        # 800px or wider, on disk, widest first
+        # on disk, widest first
         self.assertEqual(c["photos"], [{"file": "images/wide.jpg", "width": 1920, "height": 1080, "alt": "The bar",
-                                        "heading": "Visit us"}])
+                                        "heading": "Visit us"},
+                                       {"file": "images/narrow.jpg", "width": 410, "height": 300, "alt": "", "heading": ""}])
         self.assertEqual(c["sources"], {"name": "_index/inventory.json", "telephone": "_index/facts.json",
                                         "email": "_index/facts.json", "address": "_index/facts.json",
                                         "opening_hours": "_index/facts.json", "same_as": "_index/facts.json",

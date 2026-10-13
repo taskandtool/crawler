@@ -130,7 +130,7 @@ class Contract(unittest.TestCase):
                     driver.assert_not_called()
             code, out, err = self.run_in(root, "sheet", "--from", "raw/site/acme.com")
             self.assertEqual((code, out), (1, ""))
-            self.assertIn("holds no photographs 800px wide or more", err)
+            self.assertIn("holds no photographs", err)
 
     def test_a_bad_cell_is_refused_before_a_browser_starts(self):
         with tempfile.TemporaryDirectory() as root:

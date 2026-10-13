@@ -36,7 +36,7 @@ class SheetTest(unittest.TestCase):
                 open(os.path.join(d, "images", it["file"]), "wb").close()
             with open(os.path.join(d, "_index", "media.json"), "w") as f:
                 json.dump(media, f)
-            self.assertEqual(sheet.from_crawl(d, marks=False), [os.path.join(d, "images", n) for n in ("b.jpg", "a.jpg")])
+            self.assertEqual(sheet.from_crawl(d, marks=False), [os.path.join(d, "images", n) for n in ("b.jpg", "a.jpg", "small.jpg")])
             self.assertEqual(sheet.from_crawl(d, marks=True), [os.path.join(d, "images", "m.png")])
 
 
