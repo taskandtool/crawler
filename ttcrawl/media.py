@@ -10,6 +10,7 @@ page it appears on with the heading above it and the words beside it.
 import hashlib
 import re
 import struct
+from itertools import zip_longest
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 STOCK_HOSTS = ("unsplash.com", "pexels.com", "shutterstock.com", "istockphoto.com", "gettyimages", "pixabay.com",
@@ -36,6 +37,11 @@ CLOUDINARY_RE = re.compile(r"^(/[^/]+/(?:image|video)/upload)/((?:[^/]*[,_][^/]*
 SIZE_PARAMS = ("w", "h", "width", "height", "fit", "crop", "resize", "quality", "q", "format", "fm", "auto", "dpr", "s", "sz", "size")
 MODES = ("none", "brand", "content", "all")
 BRAND_PHOTOS = 60
+# A page showing this many photographs no other page shows is a gallery (a
+# portfolio, a project): its photos are the work itself, which a count of
+# pages would rank below every picture a sidebar repeats.
+GALLERY_MIN = 6
+GALLERY_PHOTOS = 40
 
 
 def guess_kind(img):
@@ -170,6 +176,20 @@ def file_name(key, original, ext):
     return "%s-%s.%s" % (stem, hashlib.sha1(key.encode()).hexdigest()[:8], ext)
 
 
+def gallery_photos(photos):
+    """Up to GALLERY_PHOTOS from the pages that are galleries, largest first
+    within each, one from each gallery in turn so no one gallery takes all."""
+    own = {}
+    for i in photos:
+        if len(i["pages"]) == 1:
+            own.setdefault(i["pages"][0]["url"], []).append(i)
+    galleries = [sorted(g, key=lambda i: -((i["width"] or 0) * (i["height"] or 0))) for g in own.values() if len(g) >= GALLERY_MIN]
+    out = []
+    for row in zip_longest(*galleries):
+        out += [i for i in row if i]
+    return out[:GALLERY_PHOTOS]
+
+
 class Media:
     """Every picture a crawl saw, keyed by identity, with its occurrences."""
 
@@ -249,8 +269,9 @@ class Media:
 
     def select(self, mode):
         """The pictures to fetch, best first. none: nothing; brand: the logo
-        candidates, the og:image, and the photographs the most pages show,
-        largest first, up to BRAND_PHOTOS; content: the logo and every
+        candidates, the og:image, the photographs the most pages show,
+        largest first, up to BRAND_PHOTOS, and the galleries' photographs, up
+        to GALLERY_PHOTOS taken in turn from each; content: the logo and every
         picture in the pages' own content; all: everything seen. Brand keeps
         others' logos (marks) and its videos too: proof and hero material."""
         items = list(self.items.values())
@@ -264,7 +285,7 @@ class Media:
         elif mode == "brand":
             photos = sorted((i for i in items if i["kind"] == "photo"),
                             key=lambda i: (-len(i["pages"]), -((i["width"] or 0) * (i["height"] or 0))))
-            chosen = logos + marks + videos + [i for i in items if i["og"]] + photos[:BRAND_PHOTOS]
+            chosen = logos + marks + videos + [i for i in items if i["og"]] + photos[:BRAND_PHOTOS] + gallery_photos(photos)
         else:
             chosen = logos + [i for i in items if not i["chrome"]]
         return list({i["key"]: i for i in chosen}.values())

@@ -1060,8 +1060,8 @@ def run_add(args):
     return _start_run(args, profile, body, settings)
 
 
-IMAGES_HELP = ("which pictures to fetch: none; brand (the logo, the og:image and the 60 photographs the most pages "
-               "show); content (every picture in the pages' own content); all (content, and the header's and "
+IMAGES_HELP = ("which pictures to fetch: none; brand (the logo, the og:image, the 60 photographs the most pages "
+               "show and up to 40 from galleries: pages of six or more photographs no other page shows); content (every picture in the pages' own content); all (content, and the header's and "
                "footer's too)")
 
 

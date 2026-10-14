@@ -82,8 +82,24 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(chosen[0]["key"], "a.com/logo.svg")
         # the logo, the partners' logos (proof for a homepage), then 60 photographs
         self.assertEqual(chosen[1]["key"], "acme.com/uploads/ifa-member-logo.jpg")
-        self.assertEqual(len(chosen), 1 + 1 + 60)
-        self.assertEqual(len(chosen[2]["pages"]), 3)                  # the photos more pages show come first
+        # the logo, the partners' logos, the 60 photos more pages show (first), then page0's
+        # own 24, a gallery: the 10 of them the 60 left out
+        self.assertEqual(len(chosen), 1 + 1 + 60 + 10)
+        self.assertEqual(len(chosen[2]["pages"]), 3)
+
+    def test_brand_keeps_a_gallerys_photos_that_a_repeated_sidebar_outranks(self):
+        m = Media()
+        sidebar = [{"tag": "img", "src": "https://a.com/thumb%d.jpg" % i, "alt": "", "chrome": False} for i in range(70)]
+        for page in range(3):
+            m.add_page("https://a.com/video%d" % page, sidebar, [])
+        work = [{"tag": "img", "src": "https://a.com/job%d.jpg" % i, "alt": "", "chrome": False} for i in range(8)]
+        m.add_page("https://a.com/gallery", sidebar[:1] + work, [])
+        m.add_page("https://a.com/about", [{"tag": "img", "src": "https://a.com/crew%d.jpg" % i, "alt": "", "chrome": False} for i in range(3)], [])
+        m.classify(None, "a")
+        keys = {i["key"] for i in m.select("brand")}
+        self.assertTrue({"a.com/job%d.jpg" % i for i in range(8)} <= keys)      # the work, though shown once
+        self.assertFalse(keys & {"a.com/crew%d.jpg" % i for i in range(3)})    # three photos are not a gallery
+        self.assertEqual(len(keys), 60 + 8)
 
 
 class FactsTests(unittest.TestCase):
