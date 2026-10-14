@@ -34,6 +34,11 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(variant_of("https://a.com/wp-content/uploads/2024/05/roof-1024x683.jpg"),
                          ("a.com/wp-content/uploads/2024/05/roof.jpg", "https://a.com/wp-content/uploads/2024/05/roof.jpg"))
         self.assertEqual(variant_of("https://a.com/uploads/roof-scaled.jpg")[1], "https://a.com/uploads/roof.jpg")
+        # Drupal's image styles: the resized copy's original, its format and token dropped
+        self.assertEqual(variant_of("https://a.com/sites/default/files/styles/card_large/public/2026-03/bedroom.png.webp?itok=Fs")[1],
+                         "https://a.com/sites/default/files/2026-03/bedroom.png")
+        self.assertEqual(variant_of("https://a.com/sites/default/files/styles/card_small/public/2026-03/bedroom.png.webp?itok=ep")[0],
+                         variant_of("https://a.com/sites/default/files/2026-03/bedroom.png")[0])
         self.assertEqual(variant_of("https://cdn.shopify.com/s/files/1/boot_800x.jpg?v=12")[1],
                          "https://cdn.shopify.com/s/files/1/boot.jpg?v=12")
         self.assertEqual(variant_of("https://static.wixstatic.com/media/abc.jpg/v1/fill/w_400,h_300/abc.jpg")[1],

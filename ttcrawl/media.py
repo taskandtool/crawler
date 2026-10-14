@@ -29,6 +29,9 @@ VIDEOS_KEPT = 3
 STOCK_NAME_RE = re.compile(r"shutterstock|istock|adobestock|gettyimages|depositphotos|stock-photo|pexels|unsplash", re.I)
 WP_SIZE_RE = re.compile(r"-(\d{2,5})x(\d{2,5})(?=\.[a-z0-9]{2,5}$)|-scaled(?=\.[a-z0-9]{2,5}$)|@\dx(?=\.[a-z0-9]{2,5}$)", re.I)
 SHOPIFY_SIZE_RE = re.compile(r"_(?:\d{2,5}x\d{0,5}|x\d{2,5}|small|medium|large|grande|compact|thumb|icon|master)(?:@\dx)?(?=\.[a-z0-9]{2,5}$)", re.I)
+# Drupal's image styles: /sites/default/files/styles/<style>/public/<file>[.webp]?itok=…
+# is a resized copy of /sites/default/files/<file>
+DRUPAL_STYLE_RE = re.compile(r"^(.*?/files)/styles/[^/]+/(?:public|private)/(.+?\.(?:jpe?g|png|gif|webp|avif))(?:\.webp)?$", re.I)
 CLOUDINARY_RE = re.compile(r"^(/[^/]+/(?:image|video)/upload)/((?:[^/]*[,_][^/]*/)*)(v\d+/)?(.+\.(?:jpe?g|png|webp|gif|avif))$", re.I)
 SIZE_PARAMS = ("w", "h", "width", "height", "fit", "crop", "resize", "quality", "q", "format", "fm", "auto", "dpr", "s", "sz", "size")
 MODES = ("none", "brand", "content", "all")
@@ -78,7 +81,8 @@ def variant_of(url):
     """(key, original) for an image URL (pure): the key is the picture's
     identity across every size the site serves it in; the original is the
     URL most likely to be its full size. WordPress -1024x683 and -scaled,
-    Shopify _800x, Wix /v1/fill/..., Cloudinary transforms, and resizing
+    Shopify _800x, Wix /v1/fill/..., Drupal's /styles/<style>/public/,
+    Cloudinary transforms, and resizing
     query parameters (?w=800, Next.js /_next/image?url=...) all collapse."""
     parts = urlsplit(url)
     if parts.path.endswith("/_next/image") or parts.path.endswith("/_vercel/image"):
@@ -92,6 +96,10 @@ def variant_of(url):
     if m:
         return (host + m.group(1) + "/" + m.group(4)).lower(), \
             urlunsplit((parts.scheme, parts.netloc, m.group(1) + "/" + m.group(4), "", ""))
+    drupal = DRUPAL_STYLE_RE.match(path)
+    if drupal:
+        original = drupal.group(1) + "/" + drupal.group(2)
+        return (host + original).lower(), urlunsplit((parts.scheme, parts.netloc, original, "", ""))
     wix = re.match(r"^(.*?\.(?:jpe?g|png|webp|gif))/v1/", path, re.I)
     if wix:
         return (host + wix.group(1)).lower(), urlunsplit((parts.scheme, parts.netloc, wix.group(1), "", ""))
