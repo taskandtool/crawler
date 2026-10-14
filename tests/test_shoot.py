@@ -18,7 +18,7 @@ class FakeDriver:
         if self.fail:
             raise cdp.CDPError("net::ERR_CONNECTION_REFUSED")
         self.calls.append(fn)
-        return {"strips": ["01.jpg", "02.jpg"], "page": "page.png", "overview": "overview.jpg", "height": 3000, "truncated": False}
+        return {"strips": ["01.webp", "02.webp"], "page": "page.png", "overview": "overview.webp", "height": 3000, "truncated": False}
 
     def stop(self):
         self.stopped = True
@@ -26,10 +26,10 @@ class FakeDriver:
 
 class SizeTest(unittest.TestCase):
     def test_strips_are_as_tall_as_a_model_reads_unscaled(self):
-        self.assertEqual(cdp.strip_height(1280), 2576)
-        self.assertEqual(cdp.strip_height(1440), 2576)
-        self.assertEqual(cdp.strip_height(390), 2576)
-        # wider than 1456: fewer rows, so the patches stay within 4784
+        self.assertEqual(cdp.strip_height(1280), 2044)
+        self.assertEqual(cdp.strip_height(1440), 2044)
+        self.assertEqual(cdp.strip_height(390), 2044)
+        # wider than 1820: fewer rows, so the patches stay within 4784
         h = cdp.strip_height(1920)
         self.assertLessEqual(-(-1920 // 28) * (h // 28), cdp.MODEL_TOKENS)
 
@@ -56,7 +56,7 @@ class ShootTest(unittest.TestCase):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(), status=lambda u: 200)
         _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)
         text = "\n".join(lines + ["Next: " + nxt])
-        self.assertIn("uploads/home-1280/overview.jpg, then 01.jpg … 02.jpg", text)
+        self.assertIn("uploads/home-1280/overview.webp, then 01.webp … 02.webp", text)
         self.assertIn("page.png is the whole page for people", text)
         self.assertIn("Next: look at each overview", text)
 

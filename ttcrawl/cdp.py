@@ -16,10 +16,11 @@ import subprocess
 import time
 import urllib.request
 
-# What a model sees at full resolution (Claude 4.7 and later): a long edge of
-# at most 2576px and at most 4784 visual tokens, one per 28x28 patch; a larger
-# image is scaled down first and its small text lost.
-MODEL_EDGE, MODEL_TOKENS, PATCH = 2576, 4784, 28
+# What a model sees at full resolution: a long edge of at most 2048px (Codex
+# shrinks and re-encodes anything larger; Claude reads up to 2576) and at most
+# 4784 visual tokens, one per 28x28 patch; a larger image is scaled down first
+# and its small text lost.
+MODEL_EDGE, MODEL_TOKENS, PATCH = 2048, 4784, 28
 MAX_STRIPS = 40            # a longer page is noted as truncated
 PAGE_MAX = 16384           # Chrome's largest capture; a longer whole page is scaled to fit
 OVERVIEW_MIN = 0.25        # a page that must shrink further gets no overview (about 10,000px tall)
@@ -365,13 +366,14 @@ class Driver:
             self.browser = None
 
 
-# JPEG quality for what a model reads: text stays sharp at a sixth of the PNG's size
+# Lossy WebP for what a model reads: the text stays sharp at a tenth of the PNG's
+# size, and an image within MODEL_EDGE reaches the model byte for byte
 SHOT_QUALITY = 82
 
 
 def strip_height(width):
-    """The tallest strip a model reads unscaled at `width` (pure): 2576px up
-    to 1456px wide, shorter beyond so the patches stay within budget."""
+    """The tallest strip a model reads unscaled at `width` (pure): 2044px up
+    to 1820px wide, shorter beyond so the patches stay within budget."""
     cols = -(-int(width) // PATCH)
     return min(MODEL_EDGE // PATCH, MODEL_TOKENS // cols) * PATCH
 
@@ -602,12 +604,12 @@ def render(browser, url, styles=False, timeout=45):
 def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
                       max_strips=MAX_STRIPS, timeout=45, height=VIEWPORT[1], mobile=False,
                       first_screen=False, allow_hosts=()):
-    """The whole page under `out_dir`: `01.jpg`, `02.jpg`… strips a model
-    reads at full resolution, `overview.jpg` (the whole page scaled to one
+    """The whole page under `out_dir`: `01.webp`, `02.webp`… strips a model
+    reads at full resolution, `overview.webp` (the whole page scaled to one
     image a model reads, when there is more than one strip), `page.png` (the
     whole page at full size, for people) and `meta.json`. What a model reads
-    is JPEG: a sixth of the PNG's size with the text as sharp, so a long turn
-    that looks at many pages stays within what one request to it may carry. Only the first
+    is lossy WebP within MODEL_EDGE: small, as sharp, and sent on unchanged,
+    so a long turn that looks at many pages stays within one request. Only the first
     `height` pixels with `first_screen`. Returns the meta dict, or raises
     CDPError."""
     strip = strip or strip_height(width)
@@ -619,11 +621,11 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
         plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
         for old in os.listdir(out_dir):     # an earlier run's strips and meta
-            if old.endswith((".png", ".jpg")) or old == "meta.json":
+            if old.endswith((".png", ".jpg", ".webp")) or old == "meta.json":
                 os.remove(os.path.join(out_dir, old))
 
         def capture(name, y, h, scale=1):
-            fmt = {"format": "jpeg", "quality": SHOT_QUALITY} if name.endswith(".jpg") else {"format": "png"}
+            fmt = {"format": "webp", "quality": SHOT_QUALITY} if name.endswith(".webp") else {"format": "png"}
             shot = s.call("Page.captureScreenshot", dict(fmt, **{
                 "captureBeyondViewport": True,
                 "clip": {"x": 0, "y": y, "width": width, "height": h, "scale": scale}}), timeout=timeout)
@@ -631,12 +633,12 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
                 f.write(base64.b64decode(shot["data"]))
             return name
 
-        files = [capture("%02d.jpg" % i, y, h) for i, (y, h) in enumerate(plan, 1)]
+        files = [capture("%02d.webp" % i, y, h) for i, (y, h) in enumerate(plan, 1)]
         whole = int(min(page_height, sum(h for _, h in plan)))
         page = capture("page.png", 0, whole, min(1.0, PAGE_MAX / whole))
         # past a quarter of its size an overview is a sliver; the strips say it all
         scale = overview_scale(width, whole)
-        overview = capture("overview.jpg", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
+        overview = capture("overview.webp", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
         meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
                 "strips": files, "page": page, "overview": overview, "truncated": truncated,
                 "engine": browser.engine}

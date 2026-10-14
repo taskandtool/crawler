@@ -1,5 +1,5 @@
 """`tt-crawl shoot`: one page as screenshots at the widths that matter, for an
-agent to look at its own work. The whole page as `overview.jpg` (all of it in
+agent to look at its own work. The whole page as `overview.webp` (all of it in
 one image a model reads, to judge its shape), strips at the full resolution a
 model reads (to judge the detail), and `page.png` (the whole page at full
 size, for people); or only the first screen. What a browser can measure (left
@@ -90,10 +90,10 @@ def report(url, results, first_screen):
         if len(strips) == 1:
             lines.append("%dpx: %s/%s  (page %dpx tall, one image%s)" % (width, meta["dir"], strips[0], meta["height"], cut))
         elif not meta.get("overview"):
-            lines.append("%dpx: %s/01.jpg … %s  (page %dpx tall, too long for one overview; read in order%s; "
+            lines.append("%dpx: %s/01.webp … %s  (page %dpx tall, too long for one overview; read in order%s; "
                          "page.png is the whole page for people)" % (width, meta["dir"], strips[-1], meta["height"], cut))
         else:
-            lines.append("%dpx: %s/overview.jpg, then 01.jpg … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
+            lines.append("%dpx: %s/overview.webp, then 01.webp … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
                 width, meta["dir"], strips[-1], meta["height"], cut))
     if any(m.get("error") for _, m in results):
         nxt = "curl -s -o /dev/null -w '%{http_code}' " + url + ", to see whether the page is served at that path"
