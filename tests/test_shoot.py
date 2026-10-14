@@ -18,7 +18,7 @@ class FakeDriver:
         if self.fail:
             raise cdp.CDPError("net::ERR_CONNECTION_REFUSED")
         self.calls.append(fn)
-        return {"strips": ["01.png", "02.png"], "page": "page.png", "overview": "overview.png", "height": 3000, "truncated": False}
+        return {"strips": ["01.jpg", "02.jpg"], "page": "page.png", "overview": "overview.jpg", "height": 3000, "truncated": False}
 
     def stop(self):
         self.stopped = True
@@ -56,7 +56,7 @@ class ShootTest(unittest.TestCase):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(), status=lambda u: 200)
         _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)
         text = "\n".join(lines + ["Next: " + nxt])
-        self.assertIn("uploads/home-1280/overview.png, then 01.png … 02.png", text)
+        self.assertIn("uploads/home-1280/overview.jpg, then 01.jpg … 02.jpg", text)
         self.assertIn("page.png is the whole page for people", text)
         self.assertIn("Next: look at each overview", text)
 

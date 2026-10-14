@@ -365,6 +365,10 @@ class Driver:
             self.browser = None
 
 
+# JPEG quality for what a model reads: text stays sharp at a sixth of the PNG's size
+SHOT_QUALITY = 82
+
+
 def strip_height(width):
     """The tallest strip a model reads unscaled at `width` (pure): 2576px up
     to 1456px wide, shorter beyond so the patches stay within budget."""
@@ -419,6 +423,19 @@ OVERFLOW_JS = """(() => {
 # 2px counts as the same edge.
 EDGES_JS = """(() => {
   const bands = [document.querySelector('header'), ...document.querySelectorAll('main > *'), document.querySelector('footer')].filter(Boolean);
+  const ground = (el) => { const cs = getComputedStyle(el); return cs.backgroundImage !== 'none' ? 'image' : cs.backgroundColor; };
+  const clear = (c) => c === 'transparent' || /rgba\\(.*,\\s*0\\)$/.test(c);
+  // a panel inside the band (its own ground, narrower than the page): its words sit
+  // in its padding, so the panel's own edge is the one that lines up
+  const panelOf = (el, band) => {
+    let found = null;
+    for (let a = el; a && a !== band; a = a.parentElement) {
+      if (clear(ground(a)) || a.getBoundingClientRect().width >= innerWidth - 2) continue;
+      const behind = a.parentElement ? ground(a.parentElement) : '';
+      if (ground(a) !== behind) found = a;
+    }
+    return found;
+  };
   const out = [];
   for (const b of bands) {
     let min = Infinity;
@@ -426,8 +443,9 @@ EDGES_JS = """(() => {
     const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       if (!n.textContent.trim()) continue;
+      const panel = panelOf(n.parentElement, b);
       const range = document.createRange(); range.selectNodeContents(n);
-      const r = range.getBoundingClientRect();
+      const r = panel ? panel.getBoundingClientRect() : range.getBoundingClientRect();
       if (r.width > 0 && r.height > 0 && r.left >= 0 && r.left < min) min = r.left;
     }
     for (const el of b.querySelectorAll('img, video, svg')) {
@@ -584,10 +602,12 @@ def render(browser, url, styles=False, timeout=45):
 def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
                       max_strips=MAX_STRIPS, timeout=45, height=VIEWPORT[1], mobile=False,
                       first_screen=False, allow_hosts=()):
-    """The whole page under `out_dir`: `01.png`, `02.png`… strips a model
-    reads at full resolution, `overview.png` (the whole page scaled to one
+    """The whole page under `out_dir`: `01.jpg`, `02.jpg`… strips a model
+    reads at full resolution, `overview.jpg` (the whole page scaled to one
     image a model reads, when there is more than one strip), `page.png` (the
-    whole page at full size, for people) and `meta.json`. Only the first
+    whole page at full size, for people) and `meta.json`. What a model reads
+    is JPEG: a sixth of the PNG's size with the text as sharp, so a long turn
+    that looks at many pages stays within what one request to it may carry. Only the first
     `height` pixels with `first_screen`. Returns the meta dict, or raises
     CDPError."""
     strip = strip or strip_height(width)
@@ -599,23 +619,24 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
         plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
         for old in os.listdir(out_dir):     # an earlier run's strips and meta
-            if old.endswith(".png") or old == "meta.json":
+            if old.endswith((".png", ".jpg")) or old == "meta.json":
                 os.remove(os.path.join(out_dir, old))
 
         def capture(name, y, h, scale=1):
-            shot = s.call("Page.captureScreenshot", {
-                "format": "png", "captureBeyondViewport": True,
-                "clip": {"x": 0, "y": y, "width": width, "height": h, "scale": scale}}, timeout=timeout)
+            fmt = {"format": "jpeg", "quality": SHOT_QUALITY} if name.endswith(".jpg") else {"format": "png"}
+            shot = s.call("Page.captureScreenshot", dict(fmt, **{
+                "captureBeyondViewport": True,
+                "clip": {"x": 0, "y": y, "width": width, "height": h, "scale": scale}}), timeout=timeout)
             with open(os.path.join(out_dir, name), "wb") as f:
                 f.write(base64.b64decode(shot["data"]))
             return name
 
-        files = [capture("%02d.png" % i, y, h) for i, (y, h) in enumerate(plan, 1)]
+        files = [capture("%02d.jpg" % i, y, h) for i, (y, h) in enumerate(plan, 1)]
         whole = int(min(page_height, sum(h for _, h in plan)))
-        page = capture("page.png", 0, whole, min(1.0, PAGE_MAX / whole)) if len(files) > 1 else files[0]
+        page = capture("page.png", 0, whole, min(1.0, PAGE_MAX / whole))
         # past a quarter of its size an overview is a sliver; the strips say it all
         scale = overview_scale(width, whole)
-        overview = capture("overview.png", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
+        overview = capture("overview.jpg", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
         meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
                 "strips": files, "page": page, "overview": overview, "truncated": truncated,
                 "engine": browser.engine}
