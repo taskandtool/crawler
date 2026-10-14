@@ -37,6 +37,8 @@ tt-crawl docs              the documents the crawled pages link to, as markdown
 tt-crawl places "Name, City" --out raw/places
                            the business's public Google listing (GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL for a proxy)
 tt-crawl shoot URL         one page's screenshots at desktop and phone width, whole or first screen (localhost too)
+tt-crawl measure URL ...    what is wrong as a browser lays the pages out at 390, 900, 1280 and 1600: left edges that
+                           differ, text under 14px, words against a panel's edge, sideways scrolling; no pictures
 tt-crawl sheet IMAGES…     several pictures as one numbered contact sheet, to name them in one look
                            (--from a crawl folder: its business card's photographs, or --marks its others' logos)
 tt-crawl check NEW_URL     the launch check: every old URL requested on the new site
@@ -65,8 +67,8 @@ in them always match it.
   where the files went, what was left alone and why), then `Next:` with a
   read-only check or the playbook's next step. Progress goes to stderr.
 - `--json` prints the result as one JSON line instead, and a refusal as one
-  JSON object (`error`, `details`, `try`) on stderr. `shoot --json` prints
-  every width's result, failed ones too. `playbook` prints the playbook.
+  JSON object (`error`, `details`, `try`) on stderr. `shoot --json` and
+  `measure --json` print every width's result, failed ones too. `playbook` prints the playbook.
 - A refusal or failure goes to stderr in the same shape: the command and
   what was wrong, the valid values, and a `Try:` line naming a command that works;
   stdout stays empty. A long list is capped in the output and written whole

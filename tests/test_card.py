@@ -136,3 +136,17 @@ class BuildTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NameFromTitleTest(unittest.TestCase):
+    def test_a_page_word_before_the_name_is_passed_over(self):
+        self.assertEqual(card.name_from_title("Home | PGT Windows & Doors | Impact Windows", "www.pgtwindows.com"), "PGT Windows & Doors")
+        self.assertEqual(card.name_from_title("Welcome - Harlow Bakery", "harlowbakery.com"), "Harlow Bakery")
+
+    def test_the_part_that_shares_a_word_with_the_domain_wins(self):
+        self.assertEqual(card.name_from_title("Fresh bread daily | Harlow Bakery", "harlowbakery.com"), "Harlow Bakery")
+
+    def test_without_a_match_the_first_named_part_stands(self):
+        self.assertEqual(card.name_from_title("Sunshine Biscotti", "www.sunshinebiscotti.com"), "Sunshine Biscotti")
+        self.assertEqual(card.name_from_title("Acme | Tools", "example.com"), "Acme")
+        self.assertEqual(card.name_from_title("Home", "example.com"), "")

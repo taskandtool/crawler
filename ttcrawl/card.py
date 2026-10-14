@@ -44,6 +44,22 @@ HOURS_LINE_RE = re.compile(r"^\s*(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?\s*:?\s*(
 SCHEMA_HOURS_RE = re.compile(r"^[A-Z][a-z](-[A-Z][a-z])?(,[A-Z][a-z])*\s+\d")
 US_LINE_RE = re.compile(r"^(.+?),\s*([^,]+),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)(?:,\s*(?:USA|US|United States))?$")
 TITLE_SPLIT_RE = re.compile(r"\s[|–-]\s")
+# a title part that names the page, not the business ("Home | PGT Windows")
+GENERIC_TITLE_RE = re.compile(r"^(home|home ?page|welcome|index|main|official site|official website)$", re.I)
+
+
+def name_from_title(title, host=""):
+    """The business's name in the homepage's title (pure): the part that
+    shares a word with the domain ("PGT Windows" for pgtwindows.com), else
+    the first part that is not a page's own name ("Home")."""
+    parts = [p.strip() for p in TITLE_SPLIT_RE.split(title or "") if p.strip()]
+    named = [p for p in parts if not GENERIC_TITLE_RE.match(p)]
+    label = re.sub(r"^www\.", "", host or "").split(".")[0].lower()
+    for p in named:
+        words = [w for w in re.findall(r"[a-z0-9]+", p.lower()) if len(w) > 2]
+        if label and any(w in label for w in words):
+            return p
+    return named[0] if named else ""
 
 
 def runs(by_day):
@@ -156,7 +172,7 @@ def build(out):
             sources[field] = source
         return value
 
-    title = TITLE_SPLIT_RE.split(home.get("title") or "")[0].strip()
+    title = name_from_title(home.get("title") or "", host)
     name = (put("name", text(markup.get("name")), markup_file) or put("name", title, inventory_file)
             or put("name", host, inventory_file))
     telephone = put("telephone", first("phone"), facts_file) or put("telephone", text(markup.get("telephone")), markup_file)

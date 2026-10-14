@@ -414,7 +414,7 @@ OVERFLOW_JS = """(() => {
   return { px: over, element: name };
 })()"""
 # Where each band's content starts on the left (the header, each child of
-# <main>, the footer): the leftmost visible text or image in it. Bands that
+# <main>, the footer): the leftmost visible words or picture in it. Bands that
 # run edge to edge, or hold content only on the right, are left out; within
 # 2px counts as the same edge.
 EDGES_JS = """(() => {
@@ -422,13 +422,73 @@ EDGES_JS = """(() => {
   const out = [];
   for (const b of bands) {
     let min = Infinity;
-    for (const el of b.querySelectorAll('h1,h2,h3,h4,p,a,img,li,dt,dd,blockquote,figure')) {
+    // where the words and pictures start, not their boxes: a padded box starts left of its words
+    const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!n.textContent.trim()) continue;
+      const range = document.createRange(); range.selectNodeContents(n);
+      const r = range.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.left >= 0 && r.left < min) min = r.left;
+    }
+    for (const el of b.querySelectorAll('img, video, svg')) {
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.height > 0 && r.left >= 0 && r.left < min) min = r.left;
     }
     if (!isFinite(min) || min < 2 || min > innerWidth / 2) continue;  // edge to edge, or content only on the right
     const name = b.tagName.toLowerCase() + (b.id ? '#' + b.id : (b.classList[0] ? '.' + b.classList[0] : ''));
     out.push({ x: Math.round(min), band: name });
+  }
+  return out;
+})()"""
+
+
+# Text set under `min` px, each element that holds its own words once,
+# as {px, element, text}. Superscripts (a ®) and hidden or visually-hidden
+# text are left out; data-lint-allow="small-text" keeps one on purpose.
+SMALL_TEXT_JS = """(() => {
+  const min = %d, out = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const seen = new Set();
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const el = n.parentElement;
+    if (!el || seen.has(el) || n.textContent.trim().length < 3) continue;
+    seen.add(el);
+    if (el.closest('sup, sub, script, style, noscript, [aria-hidden="true"], [data-lint-allow~="small-text"]')) continue;
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    if (r.width < 2 || r.height < 2 || cs.visibility === 'hidden' || +cs.opacity === 0) continue;
+    const px = parseFloat(cs.fontSize);
+    if (px >= min) continue;
+    const name = el.tagName.toLowerCase() + (el.classList[0] ? '.' + el.classList[0] : '');
+    out.push({ px: Math.round(px * 10) / 10, element: name, text: n.textContent.trim().replace(/\\s+/g, ' ').slice(0, 40) });
+  }
+  return out;
+})()"""
+# Panels, a box with a ground of its own (a colour or picture different from
+# what it sits on) narrower than the page and at least 120px tall, whose words
+# come within `min` px of its left or right edge, as {gap, side, panel,
+# text}. data-lint-allow="tight-panel" keeps one on purpose.
+TIGHT_PANEL_JS = """(() => {
+  const min = %d, out = [];
+  const ground = (el) => { const cs = getComputedStyle(el); return cs.backgroundImage !== 'none' ? 'image' : cs.backgroundColor; };
+  const clear = (c) => c === 'transparent' || /rgba\\(.*,\\s*0\\)$/.test(c);
+  const behind = (el) => { for (let a = el.parentElement; a; a = a.parentElement) { const g = ground(a); if (!clear(g)) return g; } return 'rgb(255, 255, 255)'; };
+  for (const el of document.body.querySelectorAll('div, section, article, aside, li, figure, header, footer, form')) {
+    const g = ground(el);
+    if (clear(g) || g === behind(el) || el.closest('[data-lint-allow~="tight-panel"]')) continue;
+    const box = el.getBoundingClientRect();
+    if (box.height < 120 || box.width < 200 || box.width >= innerWidth - 2) continue;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let worst = null;
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!n.textContent.trim() || n.parentElement.closest('button, a.button, [role="button"], input, select, textarea')) continue;
+      const range = document.createRange(); range.selectNodeContents(n);
+      const r = range.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      for (const [side, gap] of [['left', r.left - box.left], ['right', box.right - r.right]]) {
+        if (gap >= 0 && gap < min && (!worst || gap < worst.gap)) worst = { gap: Math.round(gap), side, text: n.textContent.trim().slice(0, 40) };
+      }
+    }
+    if (worst) out.push({ ...worst, panel: el.tagName.toLowerCase() + (el.classList[0] ? '.' + el.classList[0] : '') });
   }
   return out;
 })()"""
@@ -536,8 +596,6 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
     try:
         walk_down(s, timeout)
         page_height = s.evaluate(HEIGHT_JS) or height
-        overflow = s.evaluate(OVERFLOW_JS % width)
-        edges = edge_groups(s.evaluate(EDGES_JS) or [])
         plan, truncated = ([(0, min(height, page_height))], False) if first_screen else strip_plan(page_height, strip, max_strips)
         os.makedirs(out_dir, exist_ok=True)
         for old in os.listdir(out_dir):     # an earlier run's strips and meta
@@ -560,9 +618,27 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
         overview = capture("overview.png", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None
         meta = {"url": url, "width": width, "height": int(page_height), "strip_height": strip,
                 "strips": files, "page": page, "overview": overview, "truncated": truncated,
-                "overflow": overflow, "edges": edges, "engine": browser.engine}
+                "engine": browser.engine}
         with open(os.path.join(out_dir, "meta.json"), "w") as f:
             json.dump(meta, f, indent=2)
         return meta
+    finally:
+        s.close()
+
+
+def measure_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], mobile=False,
+                 allow_hosts=(), min_text=14, min_gap=16):
+    """What is wrong with `url` laid out at `width`, measured in the browser:
+    {"overflow": {px, element} or None, "edges": edge_groups, "small": [...],
+    "tight": [...]}. Raises CDPError when the page does not load."""
+    s = open_page(browser, url, width=width, timeout=timeout, height=height, mobile=mobile,
+                  allow_hosts=allow_hosts, still=True)
+    try:
+        s.evaluate(REVEAL_JS)
+        settle(s)
+        return {"overflow": s.evaluate(OVERFLOW_JS % width),
+                "edges": edge_groups(s.evaluate(EDGES_JS) or []),
+                "small": s.evaluate(SMALL_TEXT_JS % min_text) or [],
+                "tight": s.evaluate(TIGHT_PANEL_JS % min_gap) or []}
     finally:
         s.close()

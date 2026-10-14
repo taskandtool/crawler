@@ -32,6 +32,7 @@ BAD = {
     "playbook": ["nope"],
     "setup": ["now"],
     "shoot": ["localhost:3000"],
+    "measure": ["localhost:3000"],
     "sheet": ["nothere.png"],
 }
 
