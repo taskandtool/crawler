@@ -44,7 +44,7 @@ from .html import is_bot_check, parse_page
 from .media import MODES, Media, dimensions, extension
 from .media import file_name as image_file_name
 from .styles import merge_styles
-from .templates import Frontier, Sampler, Templates, is_collection, is_key_page
+from .templates import Frontier, Sampler, Templates, is_collection
 from .text import (MD_IMAGE_RE, MIN_MARKDOWN_CHARS, NearDuplicates, content_digest, minhash, norm_line,
                    page_name, rewrite_images, word_count)
 
@@ -174,7 +174,6 @@ class Crawl:
         self.skipped = []
         self.templates = Templates()
         self.frontier = Frontier()
-        self.key_pages = set()      # read through the KEY tier: their own key links are key too
         self.sampler = Sampler(args.per_template, args.per_section)
         self.seen = set()
         self.kept_hashes, self.near = set(), NearDuplicates()
@@ -226,24 +225,11 @@ class Crawl:
             self.templates.add(n, sm)
             self.frontier.add(n, Frontier.SITEMAP)
 
-    def promote_children(self, url):
-        """The queued pages under a brand page (a gallery's galleries, which
-        often only the sitemap names) join it in the KEY tier."""
-        base = urlsplit(url).path.rstrip("/")
-        if not base:
-            return
-        for u in list(self.frontier):
-            if u not in self.key_pages and urlsplit(u).path.rstrip("/").rsplit("/", 1)[0] == base:
-                self.frontier.add(u, Frontier.KEY)
-                self.key_pages.add(u)
-
-    def found(self, links, from_start, via_key=False):
+    def found(self, links, from_start):
         """Queue the same-site links a page carries, each through the door it
         came by: the site's header and nav first (the home page's, outside its
         main content: a post's own previous/next <nav> is not the site's), the
-        home page's own links next. In a brand crawl, a link to a brand page
-        (is_key_page) from the home page or from a brand page, and the pages
-        queued under one, come before all of them."""
+        home page's own links next."""
         nav = []
         for l in links:
             n = net.normalize_url(l["href"])
@@ -251,21 +237,14 @@ class Crawl:
                 continue
             self.record(n)
             self.templates.add(n)
-            key = (from_start or via_key) and self.args.profile == "brand" and is_key_page(n, l.get("text"))
-            if key:
-                self.key_pages.add(n)
             if from_start and l["landmark"] in ("header", "nav") and not l.get("in_main"):
                 nav.append(n)
-                tier = Frontier.KEY if key else Frontier.NAV
-            elif key:
-                tier = Frontier.KEY
+                tier = Frontier.NAV
             elif from_start:
                 tier = Frontier.FOOTER if l["landmark"] in ("footer", "aside") else Frontier.HOME_BODY
             else:
                 tier = Frontier.FOUND
             self.frontier.add(n, tier)
-            if key:
-                self.promote_children(n)
         self.templates.mark_nav(nav)
 
     # ── reading ──
@@ -451,7 +430,7 @@ class Crawl:
             if n and n != url and n not in internal:
                 internal.append(n)
         rec["outbound_internal"] = internal
-        self.found(parsed["internal_links"], from_start, via_key=url in self.key_pages)
+        self.found(parsed["internal_links"], from_start)
         for l in parsed["internal_links"]:
             n = net.normalize_url(l["href"])
             if n and n != url:

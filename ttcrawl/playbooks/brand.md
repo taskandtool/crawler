@@ -7,7 +7,7 @@ tt-crawl brand https://theirsite.com
 tt-crawl docs                                  # price lists, brochures, menus the pages link to
 tt-crawl places "Business name, City" --out raw/places   # a business people find on Google Maps: a shop, a trade, an office
 ```
-It reads the homepage, then the pages a brand is read from (about, team, reviews, gallery and the galleries under it, questions), then the rest of the menu, so a small `--max-pages 12` is often enough. For a first answer in seconds, `--max-pages 1` reads the homepage alone; the same command with `--resume` reads the rest later without reading it again.
+For a first answer in seconds, `--max-pages 1` reads the homepage alone; the same command with `--resume` reads the rest later without reading it again.
 
 `brand` is `site` with the brand's pictures (`--images brand`), `--styles`, `--screenshots` of the first five pages read (`--screenshot-pages`), and each collection sampled: every page the header links to is read; a blog or a shop gives two of each kind, six per section. Run the same command again later to refresh: pages are rewritten in place, and `_index/manifest.json` marks each one new, changed or the same.
 

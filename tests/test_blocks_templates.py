@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ttcrawl import browser  # noqa: E402
 from ttcrawl.blocks import fingerprint, to_markdown  # noqa: E402
 from ttcrawl.html import parse_page  # noqa: E402
-from ttcrawl.templates import Frontier, Sampler, Templates, is_collection, is_key_page, sitemap_label  # noqa: E402
+from ttcrawl.templates import Frontier, Sampler, Templates, is_collection, sitemap_label  # noqa: E402
 
 URL = "https://acme.com/services"
 
@@ -128,23 +128,6 @@ class TemplateTests(unittest.TestCase):
         f.add("footer", Frontier.FOUND)         # a worse door never moves it down
         self.assertEqual([f.pop() for _ in range(4)], ["about", "footer", "sitemap-1", "found"])
         self.assertIsNone(f.pop())
-
-    def test_brand_pages_by_address_or_short_label(self):
-        self.assertTrue(is_key_page("https://a.com/about-acme-roofing", "Learn more"))
-        self.assertTrue(is_key_page("https://a.com/x", "Our Team"))
-        self.assertTrue(is_key_page("https://a.com/our_work", ""))
-        self.assertFalse(is_key_page("https://a.com/roof-repair", "Learn more about how we repair roofs"))   # a sentence
-        self.assertFalse(is_key_page("https://a.com/contact", "Start your project"))                        # a call to action
-        self.assertFalse(is_key_page("https://a.com/steam-cleaning", "Steam cleaning"))
-
-    def test_a_saved_crawls_tier_numbers_keep_their_meaning(self):
-        # a crawl saved before the brand tier came keeps reading its tiers as they were
-        self.assertEqual((Frontier.START, Frontier.NAV, Frontier.HOME_BODY, Frontier.FOOTER, Frontier.SITEMAP, Frontier.FOUND), tuple(range(6)))
-        f = Frontier()
-        f.add("nav", Frontier.NAV)
-        f.add("key", Frontier.KEY)
-        f.add("key", Frontier.FOUND)            # a worse door never moves it down
-        self.assertEqual([f.pop(), f.pop()], ["key", "nav"])
 
     def test_sampler(self):
         s = Sampler(per_template=2, per_section=3)
