@@ -236,6 +236,42 @@ class SurveyTests(CrawlHarness):
                 order = [p["url"] for p in json.load(f)["pages"]]
             self.assertEqual(order, ["https://acme.com/", "https://acme.com/services", "https://acme.com/contact"])
 
+    def test_a_brand_crawl_reads_the_brand_pages_before_the_rest_of_the_nav(self):
+        areas = "".join(f"<a href='/areas/town{i}'>Town {i}</a> " for i in range(6))
+        home = (f"<html><head><title>Acme</title></head><body><header><nav><a href='/services'>Services</a> {areas}"
+                f"<a href='/about-acme-roofing'>About</a> <a href='/our-work'>Gallery</a></nav></header>"
+                f"<main><h1>Acme Roofing</h1><p>{LONG}</p><a href='/reviews'>What customers say</a></main></body></html>")
+        page = lambda t: f"<html><head><title>{t}</title></head><body><main><h1>{t}</h1><p>{LONG} {t}.</p></main></body></html>"
+        hub = page("Our work").replace("</main>", "<a href='/areas/town5'>Town 5</a> <a href='/our-work/residential'>Homes</a></main>")
+        extra = {"https://acme.com/about-acme-roofing": page("About"), "https://acme.com/our-work": hub,
+                 "https://acme.com/our-work/residential": page("Homes"),
+                 "https://acme.com/reviews": page("Reviews"), **{f"https://acme.com/areas/town{i}": page(f"Town {i}") for i in range(6)}}
+        with mock.patch.dict(PAGES, {"https://acme.com/": home, **extra}):
+            with tempfile.TemporaryDirectory() as out:
+                self.crawl(out, command="brand", max_pages=5, images="none", styles=False, screenshots=False)
+                with open(os.path.join(out, "_index", "manifest.json")) as f:
+                    order = [p["url"] for p in json.load(f)["pages"]]
+        self.assertEqual(order[0], "https://acme.com/")
+        # the home page's brand links, then the gallery's own gallery, before the menu's other pages
+        self.assertEqual(set(order[1:]), {"https://acme.com/about-acme-roofing", "https://acme.com/our-work",
+                                          "https://acme.com/reviews", "https://acme.com/our-work/residential"})
+
+    def test_a_brand_pages_children_only_the_sitemap_names_come_early_too(self):
+        home = (f"<html><head><title>Acme</title></head><body><header><nav><a href='/services'>Services</a> "
+                f"<a href='/contact'>Contact</a> <a href='/gallery'>Gallery</a></nav></header><main><h1>Acme</h1><p>{LONG}</p></main></body></html>")
+        page = lambda t: f"<html><head><title>{t}</title></head><body><main><h1>{t}</h1><p>{LONG} {t}.</p></main></body></html>"
+        smap = "<urlset>" + "".join(f"<url><loc>https://acme.com{p}</loc></url>" for p in ["/blog-post", "/gallery/residential"]) + "</urlset>"
+        own = lambda t, words: f"<html><head><title>{t}</title></head><body><main><h1>{t}</h1><p>{' '.join([words] * 12)}</p></main></body></html>"
+        pages = {"https://acme.com/": home, "https://acme.com/gallery": own("Gallery", "Pick a kind of job to see its photographs, homes or businesses."),
+                 "https://acme.com/gallery/residential": own("Homes", "A slate roof in Leeds, a tile roof in York and a flat garage roof."),
+                 "https://acme.com/blog-post": page("Post")}
+        with mock.patch.dict(PAGES, pages), mock.patch.dict(SITEMAPS, {"https://acme.com/sitemap.xml": smap}):
+            with tempfile.TemporaryDirectory() as out:
+                self.crawl(out, command="brand", max_pages=3, images="none", styles=False, screenshots=False)
+                with open(os.path.join(out, "_index", "manifest.json")) as f:
+                    order = [p["url"] for p in json.load(f)["pages"]]
+        self.assertEqual(order, ["https://acme.com/", "https://acme.com/gallery", "https://acme.com/gallery/residential"])
+
     def test_add_reads_one_more_and_writes_it_all_again(self):
         with tempfile.TemporaryDirectory() as out:
             self.crawl(out, command="survey")

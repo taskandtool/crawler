@@ -120,21 +120,41 @@ def is_collection(template):
     return not template.startswith("/") or "*" in template or "{n}" in template
 
 
+# The pages a brand is read from, named in a link's address or its label.
+KEY_PAGE_RE = re.compile(r"\b(about|our[- ]story|who[- ]we[- ]are|team|staff|our[- ]people|reviews?|testimonials?|"
+                         r"gallery|portfolio|projects|our[- ]work|case[- ]stud(?:y|ies)|faqs?|questions|why)\b", re.I)
+
+
+def is_key_page(url, text):
+    """A brand page by its address, or by a link label of a few words ("About
+    us", "Our Team"); a sentence that mentions one ("learn more about roof
+    repair") is not."""
+    path = urlsplit(url).path.replace("-", " ").replace("_", " ")
+    label = text if len((text or "").split()) <= 4 else ""
+    return bool(KEY_PAGE_RE.search(path + " " + (label or "")))
+
+
 class Frontier:
     """The URLs waiting to be read, best first. Tiers, lowest first, first
-    come first served within one: the start page; what the site's header and
-    nav link to; what the home page's own content links to; what its footer
+    come first served within one: the start page; for a brand crawl, the
+    pages a brand is read from (is_key_page: about, team, reviews, gallery,
+    projects, questions), so a small --max-pages reads those; what the
+    site's header and nav link to; what the home page's own content links
+    to; what its footer
     links to; the sitemap; everything else found along the way. A URL found
     again through a better door moves up."""
-    START, NAV, HOME_BODY, FOOTER, SITEMAP, FOUND = range(6)
+    # Each tier's number is what a saved crawl records; ORDER is the reading order.
+    START, NAV, HOME_BODY, FOOTER, SITEMAP, FOUND, KEY = range(7)
+    ORDER = (START, KEY, NAV, HOME_BODY, FOOTER, SITEMAP, FOUND)
+    RANK = {t: i for i, t in enumerate(ORDER)}
 
     def __init__(self):
-        self.tiers = [OrderedDict() for _ in range(6)]
+        self.tiers = {t: OrderedDict() for t in self.ORDER}
         self.where = {}
 
     def add(self, url, tier):
         at = self.where.get(url)
-        if at is not None and at <= tier:
+        if at is not None and self.RANK[at] <= self.RANK[tier]:
             return False
         if at is not None:
             del self.tiers[at][url]
@@ -143,7 +163,7 @@ class Frontier:
         return at is None
 
     def pop(self):
-        for tier in self.tiers:
+        for tier in self.tiers.values():
             if tier:
                 url, _ = tier.popitem(last=False)
                 del self.where[url]
@@ -154,7 +174,7 @@ class Frontier:
         return len(self.where)
 
     def __iter__(self):
-        for tier in self.tiers:
+        for tier in self.tiers.values():
             yield from tier
 
 
