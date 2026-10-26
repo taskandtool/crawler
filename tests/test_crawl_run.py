@@ -646,6 +646,20 @@ class CDPTests(unittest.TestCase):
                 chrome.Chrome("/bin/chrome", popen=lambda *a, **k: proc)
         proc.terminate.assert_called_once()
 
+    def test_chrome_never_touches_the_keychain(self):
+        launched = []
+        proc = mock.Mock()
+        proc.poll.return_value = 0
+
+        def popen(args, **kwargs):
+            launched.append(args)
+            return proc
+
+        with mock.patch.object(cdp, "wait_for_endpoint", lambda port, tries: "ws://x"):
+            chrome.Chrome("/bin/chrome", popen=popen).stop()
+        self.assertIn("--use-mock-keychain", launched[0])
+        self.assertIn("--password-store=basic", launched[0])
+
     def test_a_chrome_that_cannot_run_is_never_linked(self):
         data = BytesIO()
         with zipfile.ZipFile(data, "w") as z:

@@ -216,8 +216,11 @@ class Chrome:
     def __init__(self, binary, popen=subprocess.Popen):
         self.port = cdp.free_port()
         self.profile = tempfile.mkdtemp(prefix="tt-crawl-chrome-")
+        # The mock keychain keeps a throwaway profile off the macOS keychain,
+        # which otherwise asks the person at the screen where to store a key.
         self.proc = popen([binary, "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
                            "--hide-scrollbars", "--font-render-hinting=none", "--no-first-run", "--mute-audio",
+                           "--use-mock-keychain", "--password-store=basic",
                            "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=%d" % self.port,
                            "--user-data-dir=%s" % self.profile, "about:blank"],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
