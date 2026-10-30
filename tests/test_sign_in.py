@@ -82,7 +82,7 @@ class SignedInTest(unittest.TestCase):
         class Opener:
             def open(self, req, timeout):
                 opened.append(req.full_url)
-                return "resp"
+                return type("Resp", (), {"geturl": lambda self: req.full_url})()
 
         env = {"TTCRAWL_SIGN_IN": "signer"}
         real_opener, real_signed = net._opener, net.signed_in
@@ -95,3 +95,54 @@ class SignedInTest(unittest.TestCase):
             net._opener, net.signed_in = real_opener, real_signed
         self.assertEqual(opened, ["https://a.example.com/a?t=1", "https://a.example.com/b",
                                   "https://a.example.com/c?t=1"])
+
+
+class ChainTest(unittest.TestCase):
+    """Every hop of a redirect reaches the result; the sign-in's own does not."""
+
+    def test_each_hop_is_kept_on_the_first_request(self):
+        handler = net._GuardedRedirect()
+        first = net.Request("https://1.1.1.1/old")
+        first._chain = []
+        hop = handler.redirect_request(first, None, 301, "", {}, "https://1.1.1.1/mid")
+        handler.redirect_request(hop, None, 302, "", {}, "https://1.1.1.1/new")
+        self.assertEqual(first._chain, [(301, "https://1.1.1.1/mid"), (302, "https://1.1.1.1/new")])
+
+    def test_the_sign_in_hop_is_left_out(self):
+        url = "https://a.example.com/admin"
+
+        class Opener:
+            def open(self, req, timeout):
+                req._chain += [(302, url), (301, "https://a.example.com/admin/")]
+                return type("Resp", (), {"geturl": lambda self: url + "/"})()
+
+        real_opener, real_signed = net._opener, net.signed_in
+        net._opener, net.signed_in = Opener(), lambda u: u + "?t=1"
+        net._cookie_hosts.clear()
+        try:
+            req = net.Request(url)
+            req._chain = []
+            net._open(req, 5)
+        finally:
+            net._opener, net.signed_in = real_opener, real_signed
+            net._cookie_hosts.clear()
+        self.assertEqual(req._chain, [(301, "https://a.example.com/admin/")])
+
+
+    def test_a_refused_sign_in_is_asked_again(self):
+        opened = []
+
+        class Opener:
+            def open(self, req, timeout):
+                opened.append(req.full_url)
+                return type("Resp", (), {"geturl": lambda self: "https://sign.example.net/access"})()
+
+        real_opener, real_signed = net._opener, net.signed_in
+        net._opener, net.signed_in = Opener(), lambda u: u + "?t=1"
+        net._cookie_hosts.clear()
+        try:
+            for path in ("/a", "/b"):
+                net._open(net.Request("https://a.example.com" + path), 5)
+        finally:
+            net._opener, net.signed_in = real_opener, real_signed
+        self.assertEqual(opened, ["https://a.example.com/a?t=1", "https://a.example.com/b?t=1"])

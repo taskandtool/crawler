@@ -84,3 +84,43 @@ class ShootTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PageStatusTest(unittest.TestCase):
+    """A page that sends the visitor elsewhere is not shot as if it were the page."""
+
+    def fetching(self, answer):
+        real = shoot.net.fetch_once
+
+        def fake(url, **_kw):
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        shoot.net.fetch_once = fake
+        self.addCleanup(setattr, shoot.net, "fetch_once", real)
+
+    def test_another_site_is_a_reason_not_a_status(self):
+        self.fetching({"status": 200, "final_url": "https://sign.example.net/access?return_to=x"})
+        why = shoot.page_status("https://a.example.com/admin")
+        self.assertEqual(why, "https://a.example.com/admin sends visitors to another site, "
+                              "https://sign.example.net/access (often a sign-in)")
+        results = shoot.shoot("https://a.example.com/admin", [1280], "uploads", driver=FakeDriver(),
+                              status=lambda u: why)
+        self.assertEqual(results[0][1]["error"], why)
+        self.assertIn("to see where it sends visitors", shoot.report("https://a.example.com/admin", results, False)[2])
+
+    def test_www_and_the_bare_domain_are_one_site(self):
+        self.fetching({"status": 200, "final_url": "https://example.com/about"})
+        self.assertEqual(shoot.page_status("https://www.example.com/about"), 200)
+
+    def test_a_redirect_this_machine_may_not_follow_says_where_it_went(self):
+        import urllib.error
+        self.fetching(urllib.error.URLError("redirect to non-public host blocked: http://localhost:4000/access?x=1"))
+        self.assertEqual(shoot.page_status("https://a.example.com/admin"),
+                         "https://a.example.com/admin sends visitors to http://localhost:4000/access, "
+                         "which this machine may not open (often a sign-in)")
+
+    def test_nothing_answering_is_none(self):
+        self.fetching(OSError("connection refused"))
+        self.assertIsNone(shoot.page_status("https://a.example.com/"))

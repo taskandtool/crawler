@@ -9,6 +9,7 @@ server (localhost); every other private address stays refused.
 import json
 import os
 import re
+import urllib.error
 from urllib.parse import urlsplit
 
 from . import cdp, chrome, net
@@ -29,22 +30,49 @@ def name_for(url):
 def page_status(url, timeout=15):
     """The page's HTTP status, or None when nothing answers: net's fetch,
     with its sign-in and the crawler's own name (a firewall that refuses
-    Python's default one would make a page Chrome loads look like an error)."""
+    Python's default one would make a page Chrome loads look like an error).
+    A page that sends the visitor to another site, or to an address this
+    machine may not open, answers with why instead: a sign-in page there
+    would look like the page."""
     try:
-        return net.fetch_once(url, cap=0, timeout=timeout)["status"]
+        r = net.fetch_once(url, cap=0, timeout=timeout)
+    except urllib.error.URLError as e:
+        blocked = str(e.reason).partition("redirect to non-public host blocked: ")[2]
+        return ("%s sends visitors to %s, which this machine may not open (often a sign-in)"
+                % (url, _bare(blocked)) if blocked else None)
     except Exception:
         return None
+    if _site(r["final_url"]) != _site(url):
+        return "%s sends visitors to another site, %s (often a sign-in)" % (url, _bare(r["final_url"]))
+    return r["status"]
+
+
+def why_not(url, code):
+    """Why a page is not shot or measured, from `page_status`; None when it can be:
+    a screenshot of an error page, or of another site's, would look like success."""
+    if code is None:
+        return "nothing answered at %s" % url
+    if isinstance(code, str):
+        return code
+    return "%s answered %d" % (url, code) if code >= 400 else None
+
+
+def _site(url):
+    return (urlsplit(url).hostname or "").lower().removeprefix("www.")
+
+
+def _bare(url):
+    """An address without its query: a sign-in page's carries the way back."""
+    parts = urlsplit(url)
+    return "%s://%s%s" % (parts.scheme, parts.netloc, parts.path)
 
 
 def shoot(url, widths, out, first_screen=False, driver=None, status=page_status):
-    """[(width, meta)] for each width; meta carries `dir` and `strips`, or `error`.
-    A page that answers 400 or above is not shot: a screenshot of an error
-    page would look like success."""
-    code = status(url)
-    if code is None:
-        return [(w, {"error": "nothing answered at %s" % url}) for w in widths]
-    if code >= 400:
-        return [(w, {"error": "%s answered %d" % (url, code)}) for w in widths]
+    """[(width, meta)] for each width; meta carries `dir` and `strips`, or
+    `error` (`why_not`)."""
+    why = why_not(url, status(url))
+    if why:
+        return [(w, {"error": why}) for w in widths]
     name = name_for(url)
     host = (urlsplit(url).hostname or "").lower()
     allow = (host,) if host in LOCAL_HOSTS else ()
@@ -89,7 +117,9 @@ def report(url, results, first_screen):
         else:
             lines.append("%dpx: %s/overview.webp, then 01.webp … %s  (page %dpx tall%s; page.png is the whole page for people)" % (
                 width, meta["dir"], strips[-1], meta["height"], cut))
-    if any(m.get("error") for _, m in results):
+    if any("sends visitors to" in m.get("error", "") for _, m in results):
+        nxt = "curl -sI " + url + ", to see where it sends visitors"
+    elif any(m.get("error") for _, m in results):
         nxt = "curl -s -o /dev/null -w '%{http_code}' " + url + ", to see whether the page is served at that path"
     elif any(m.get("overview") for _, m in results):
         nxt = "look at each overview for the page's shape, then its strips in order for the detail"
@@ -121,7 +151,8 @@ def add_parser(sub):
     p = command(sub, "shoot", "screenshots of one page at desktop and phone width, whole or first screen; "
                               "may open this machine's own dev server",
                 "Prints each width's folder and which image to read first, then Next:. --json prints every width's "
-                "result as JSON, failed ones too. Exit 1 when a width failed (a page answering 400 or more is not shot).",
+                "result as JSON, failed ones too. Exit 1 when a width failed (a page answering 400 or more, or "
+                "sending visitors to another site, is not shot).",
                 with_json=False)
     p.add_argument("url", help="the page, e.g. http://localhost:3000/ or https://example.com/about")
     p.add_argument("--width", type=int, action="append",

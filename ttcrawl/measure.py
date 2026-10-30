@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from . import cdp, chrome
 from .say import command, done, fail
-from .shoot import LOCAL_HOSTS, PHONE_HEIGHT, DESKTOP_HEIGHT, page_status
+from .shoot import LOCAL_HOSTS, PHONE_HEIGHT, DESKTOP_HEIGHT, page_status, why_not
 
 WIDTHS = [390, 900, 1280, 1600]
 MIN_TEXT, MIN_GAP = 14, 16
@@ -19,13 +19,11 @@ MIN_TEXT, MIN_GAP = 14, 16
 
 def measure(urls, widths, driver=None, status=page_status, min_text=MIN_TEXT, min_gap=MIN_GAP):
     """[{url, width, overflow, edges, small, tight}] for each page at each
-    width, or {url, width, error}. A page that answers 400 or more is not
-    measured: an error page would look fine."""
+    width, or {url, width, error} (`why_not`)."""
     out, todo = [], []
     for url in urls:
-        code = status(url)
-        if code is None or code >= 400:
-            why = "nothing answered at %s" % url if code is None else "%s answered %d" % (url, code)
+        why = why_not(url, status(url))
+        if why:
             out += [{"url": url, "width": w, "error": why} for w in widths]
         else:
             todo.append(url)

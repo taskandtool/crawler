@@ -116,11 +116,16 @@ class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
         host = urlsplit(newurl).hostname
         within_local = local_http_url(newurl) and urlsplit(newurl).netloc == urlsplit(req.full_url).netloc
         if not host or not (within_local or is_public_host(host)):
-            raise urllib.error.URLError("redirect to non-public host blocked")
-        chain = getattr(req, "_chain", [])
+            raise urllib.error.URLError("redirect to non-public host blocked: %s" % newurl)
+        # one list for the first request and every hop, so fetch_once,
+        # which holds only the first, reads every hop from it
+        chain = getattr(req, "_chain", None)
+        if chain is None:
+            chain = req._chain = []
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new is not None:
-            new._chain = chain + [(code, newurl)]
+            chain.append((code, newurl))
+            new._chain = chain
         return new
 
 
@@ -168,14 +173,22 @@ def signed_in(url, env=os.environ, run=subprocess.run, now=time.monotonic):
 def _open(req, timeout, now=time.monotonic):
     """`_opener.open`, signed in where the site asks. One sign-in per host
     serves the run's later requests through its cookie; the site's redirect
-    takes the token out, so `final_url` never carries it."""
+    takes the token out, so `final_url` never carries it, and that hop is
+    left out of the chain."""
     url, host = req.full_url, urlsplit(req.full_url).hostname
     target = url if now() - _cookie_hosts.get(host, -SIGNED_FOR) < SIGNED_FOR else signed_in(url)
     if target == url:
         return _opener.open(req, timeout=timeout)
     req.full_url = target
     resp = _opener.open(req, timeout=timeout)
-    _cookie_hosts[host] = now()
+    # signed in only if the site kept the visitor (a refused link sends them
+    # to sign in elsewhere): then its cookie serves the next requests
+    if urlsplit(resp.geturl()).hostname == host:
+        _cookie_hosts[host] = now()
+    # the sign-in's own hop back to the address is not the site redirecting
+    chain = getattr(req, "_chain", None)
+    if chain and urlsplit(chain[0][1]).hostname == host:
+        del chain[0]
     return resp
 
 
@@ -244,13 +257,14 @@ def fetch_once(url, cap=2_000_000, timeout=30, method="GET"):
             body = b"" if method == "HEAD" else resp.read(cap + 1)
             headers = {k.lower(): v for k, v in resp.headers.items()}
             body = decompress(body, headers.get("content-encoding", ""))
-            return {"status": resp.status, "final_url": resp.geturl(), "chain": _chain_of(resp, req),
+            return {"status": resp.status, "final_url": resp.geturl(), "chain": list(req._chain),
                     "headers": headers, "body": body[:cap], "truncated": len(body) > cap}
     except urllib.error.HTTPError as e:
         body = b"" if method == "HEAD" else (e.read(cap) if hasattr(e, "read") else b"")
         headers = {k.lower(): v for k, v in (e.headers or {}).items()}
         return {"status": e.code, "final_url": e.geturl() if hasattr(e, "geturl") else url,
-                "chain": [], "headers": headers, "body": decompress(body, headers.get("content-encoding", "")),
+                "chain": list(getattr(req, "_chain", [])), "headers": headers,
+                "body": decompress(body, headers.get("content-encoding", "")),
                 "truncated": False}
 
 
@@ -270,14 +284,6 @@ def decompress(body, encoding=""):
             except zlib.error:
                 return body
     return body
-
-
-def _chain_of(resp, req):
-    # urllib replaces the request on each hop; the final one carries the chain
-    chain = getattr(resp, "_chain", None)
-    if chain is None:
-        chain = getattr(req, "_chain", [])
-    return list(chain)
 
 
 def fetch_text(url, cap=2_000_000, timeout=30):
