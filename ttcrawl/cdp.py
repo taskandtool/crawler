@@ -16,6 +16,8 @@ import subprocess
 import time
 import urllib.request
 
+from . import net
+
 # What a model sees at full resolution: a long edge of at most 2048px (Codex
 # shrinks and re-encodes anything larger; Claude reads up to 2576) and at most
 # 4784 visual tokens, one per 28x28 patch; a larger image is scaled down first
@@ -553,7 +555,7 @@ def open_page(browser, url, width=VIEWPORT[0], timeout=45, height=VIEWPORT[1], m
                 s.call("Network.setUserAgentOverride", {"userAgent": agent.replace("HeadlessChrome", "Chrome")})
         except CDPError:
             pass  # a browser without them keeps its own name
-        nav = s.call("Page.navigate", {"url": url}, timeout=timeout)
+        nav = s.call("Page.navigate", {"url": net.signed_in(url)}, timeout=timeout)
         if nav.get("errorText"):
             raise PageError("%s: %s" % (url, nav["errorText"]))
         s.wait_event("Page.loadEventFired", timeout=timeout)

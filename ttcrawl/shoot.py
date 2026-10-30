@@ -9,8 +9,6 @@ server (localhost); every other private address stays refused.
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from urllib.parse import urlsplit
 
 from . import cdp, chrome, net
@@ -29,15 +27,11 @@ def name_for(url):
 
 
 def page_status(url, timeout=15):
-    """The page's HTTP status, or None when nothing answers."""
+    """The page's HTTP status, or None when nothing answers: net's fetch,
+    with its sign-in and the crawler's own name (a firewall that refuses
+    Python's default one would make a page Chrome loads look like an error)."""
     try:
-        # the crawler's own name: a firewall that refuses Python's default one
-        # would make a page Chrome loads look like an error page
-        req = urllib.request.Request(url, method="GET", headers={"User-Agent": net.USER_AGENT})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status
-    except urllib.error.HTTPError as e:
-        return e.code
+        return net.fetch_once(url, cap=0, timeout=timeout)["status"]
     except Exception:
         return None
 

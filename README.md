@@ -136,6 +136,15 @@ styles. The output says which happened (`browser_note` under `--json`);
 `renderer` says what actually rendered the pages. `tt-crawl setup` installs
 both for this user.
 
+**Pages behind a sign-in.** With `TTCRAWL_SIGN_IN` set to a command,
+the crawler asks it before opening a site, in the browser and for every other
+request (`audit`, `check`, a crawl): it gets the address and prints JSON
+whose `url` is what to open, a signed-in link to the same host or the
+address unchanged, and `"site": true` when no page of that host needs one.
+The sign-in's cookie serves that host's later requests for ten minutes. A
+host answered with `site`, or a failure, is opened as it is and not asked
+about again in that run. Unset, nothing is asked.
+
 ## Safety rails
 
 - A crawl's start host must resolve to a public address; private, loopback,

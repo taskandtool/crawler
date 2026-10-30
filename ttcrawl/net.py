@@ -5,12 +5,19 @@ checked against private, loopback, link-local and reserved ranges before a
 command requests it, and again on every redirect hop. The one exception is
 the site running on this machine (http://localhost or 127.0.0.1), which
 `check` and `audit` exist to test. A 429 (or a 503 with Retry-After) is
-waited out and retried, never hammered.
+waited out and retried, never hammered. With $TTCRAWL_SIGN_IN set, a site
+that asks for a sign-in is opened through the link that command gives
+(`signed_in`), here and in the browser.
 """
 import gzip
+import http.cookiejar
 import ipaddress
+import json
+import os
 import random
+import shlex
 import socket
+import subprocess
 import time
 import zlib
 import urllib.error
@@ -117,7 +124,59 @@ class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
         return new
 
 
-_opener = urllib.request.build_opener(_GuardedRedirect())
+# A sign-in's cookie, kept for the rest of the run.
+_jar = http.cookiejar.CookieJar()
+_opener = urllib.request.build_opener(_GuardedRedirect(), urllib.request.HTTPCookieProcessor(_jar))
+
+# Hosts the sign-in command said need no sign-in anywhere (or that it could
+# not answer for), not asked again this run; the signed links it gave, by
+# address; and the hosts this opener holds a sign-in's cookie for. Each kept
+# well inside the few minutes a signed link lasts.
+_open_as_is, _signed, _cookie_hosts = set(), {}, {}
+SIGNED_FOR = 600
+
+
+def signed_in(url, env=os.environ, run=subprocess.run, now=time.monotonic):
+    """The address to open for `url`. $TTCRAWL_SIGN_IN, when set, names a
+    command that gets the address and prints JSON whose `url` is what to
+    open: a signed-in link for a page of the caller's own that asks for a
+    sign-in, else the address unchanged, with `"site": true` when that holds
+    for the whole host. Anything else it does, or a failure, opens `url` as
+    it is and the host is not asked about again."""
+    command, host = env.get("TTCRAWL_SIGN_IN"), urlsplit(url).hostname
+    if not command or not host or host in _open_as_is:
+        return url
+    link, at = _signed.get(url, (None, 0))
+    if link and now() - at < SIGNED_FOR:
+        return link
+    answer = {}
+    try:
+        out = run([os.path.expanduser(w) for w in shlex.split(command)] + [url],
+                  capture_output=True, text=True, timeout=30)
+        answer = json.loads(out.stdout or "{}")
+        got = answer.get("url")
+    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+        got = None
+    if isinstance(got, str) and got != url and urlsplit(got).hostname == host:
+        _signed[url] = (got, now())
+        return got
+    if got != url or answer.get("site") is True:
+        _open_as_is.add(host)
+    return url
+
+
+def _open(req, timeout, now=time.monotonic):
+    """`_opener.open`, signed in where the site asks. One sign-in per host
+    serves the run's later requests through its cookie; the site's redirect
+    takes the token out, so `final_url` never carries it."""
+    url, host = req.full_url, urlsplit(req.full_url).hostname
+    target = url if now() - _cookie_hosts.get(host, -SIGNED_FOR) < SIGNED_FOR else signed_in(url)
+    if target == url:
+        return _opener.open(req, timeout=timeout)
+    req.full_url = target
+    resp = _opener.open(req, timeout=timeout)
+    _cookie_hosts[host] = now()
+    return resp
 
 
 def throttled(status, headers):
@@ -181,7 +240,7 @@ def fetch_once(url, cap=2_000_000, timeout=30, method="GET"):
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}, method=method)
     req._chain = []
     try:
-        with _opener.open(req, timeout=timeout) as resp:
+        with _open(req, timeout) as resp:
             body = b"" if method == "HEAD" else resp.read(cap + 1)
             headers = {k.lower(): v for k, v in resp.headers.items()}
             body = decompress(body, headers.get("content-encoding", ""))
@@ -247,7 +306,7 @@ def fetch_bytes(url, cap, content_types=IMAGE_CONTENT_TYPES, sleep=time.sleep):
 
 def _fetch_bytes_once(url, cap, content_types):
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"})
-    with _opener.open(req, timeout=30) as resp:
+    with _open(req, 30) as resp:
         ctype = resp.headers.get("Content-Type", "")
         if content_types and not ctype.startswith(content_types):
             return None, ctype
