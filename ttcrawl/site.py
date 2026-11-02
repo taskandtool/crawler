@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
-from . import __version__, card, chrome, dom, inventory, net, paths, structured
+from . import __version__, card, chrome, dom, inventory, net, paths, places, structured
 from .say import command as say_command, count, done, fail
 from .blocks import fingerprint, to_markdown
 from .facts import Facts, jsonld_reviews, reviews as page_reviews
@@ -707,7 +707,6 @@ class Crawl:
         # brand --places: the business's own listing, named from the card just
         # written. An extra, so its outcome is a line here, never the exit code.
         if getattr(args, "places", False):
-            from . import places
             self.listing = places.find_listing(site=self.start, folder=out)
             summary["places"] = places.listing_data(self.listing)
         self.written = set(written)
@@ -763,7 +762,6 @@ class Crawl:
         if left:
             lines.append("left alone: " + "; ".join(left))
         if getattr(self, "listing", None):
-            from . import places
             lines.append(places.listing_line(self.listing))
         lines.append("%s%s%s" % (
             "rendered by %s (%d of %d pages)" % (s["renderer"], s["rendered"], s["pages"]) if s["renderer"] else "read without a browser",
