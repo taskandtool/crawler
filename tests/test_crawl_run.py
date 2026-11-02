@@ -94,6 +94,38 @@ class CrawlHarness(unittest.TestCase):
         return json.loads(buf.getvalue().strip().splitlines()[-1]) if code == 0 else None
 
 
+class BrandPlacesTests(CrawlHarness):
+    """brand --places: the listing is one more line of the crawl's summary
+    (and `places` under --json), never a second result or the exit code."""
+
+    FOUND = {"ok": True, "place_id": "ChIJa", "base": "raw/places/ChIJa", "summary": {
+        "name": "Acme", "telephone": None, "website": "https://acme.com/", "rating": 4.8, "review_count": 31,
+        "reviews": [{}, {}], "opening_hours": []}}
+
+    def test_no_listing_access_is_a_line_not_a_failed_crawl(self):
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "", "MACHINE_TOKEN": ""}):
+            summary = self.crawl(out, command="brand", places=True)
+        self.assertGreater(summary["pages"], 0)
+        self.assertFalse(summary["places"]["ok"])
+        self.assertIn("request-connection google-places", summary["places"]["try"])
+
+    def test_a_listing_found_is_in_the_one_summary_named_from_this_crawl(self):
+        from ttcrawl import places
+        with tempfile.TemporaryDirectory() as out, mock.patch.object(places, "find_listing", return_value=self.FOUND) as find:
+            summary = self.crawl(out, command="brand", places=True)
+            self.assertEqual(find.call_args.kwargs["folder"], out)
+        self.assertEqual((summary["places"]["place_id"], summary["places"]["rating"]), ("ChIJa", 4.8))
+
+    def test_the_text_summary_says_what_the_listing_holds(self):
+        from ttcrawl import places
+        self.assertEqual(places.listing_line(self.FOUND),
+                         "Google listing: Acme, rated 4.8 from 31 reviews, 2 quoted, in raw/places/ChIJa.summary.json")
+        refused = places.refused(1, "no Google Places access", "python3 ~/tools/taskandtool.py request-connection google-places")
+        self.assertEqual(places.listing_line(refused),
+                         "Google listing: not read (no Google Places access); Try: python3 ~/tools/taskandtool.py request-connection google-places")
+
+
 class CrawlRunTests(CrawlHarness):
     def test_thin_page_is_kept_and_marked(self):
         with tempfile.TemporaryDirectory() as out:

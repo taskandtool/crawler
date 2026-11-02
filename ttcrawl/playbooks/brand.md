@@ -3,10 +3,10 @@ Facts, voice and look: every page the site's own nav names, a sample of each col
 
 ## Run
 ```
-tt-crawl brand https://theirsite.com
-tt-crawl docs                                  # price lists, brochures, menus the pages link to
-tt-crawl places "Business name, City" --out raw/places   # a business people find on Google Maps: a shop, a trade, an office
+tt-crawl brand https://theirsite.com --places   # --places: a business people find on Google Maps (a shop, a trade, an office)
+tt-crawl docs                                   # price lists, brochures, menus the pages link to
 ```
+`--places` adds the business's own Google listing to `raw/places/` (rating, reviews, hours), named from the crawl and kept only when the listing names the same site. It needs the app's google-places connection; without one it says how to ask.
 For a first answer in seconds, `--max-pages 1` reads the homepage alone; the same command with `--resume` reads the rest later without reading it again.
 
 `brand` is `site` with the brand's pictures (`--images brand`), `--styles`, `--screenshots` of the first five pages read (`--screenshot-pages`), and each collection sampled: every page the header links to is read; a blog or a shop gives two of each kind, six per section. Run the same command again later to refresh: pages are rewritten in place, and `_index/manifest.json` marks each one new, changed or the same.

@@ -126,6 +126,64 @@ class PlacesTests(unittest.TestCase):
                          ("https://proxy/v1", {"X-Goog-Api-Key": "k"}))
         self.assertIsNone(places.access({"GOOGLE_PLACES_API_URL": "https://proxy/v1"}), "a URL without a key is no access")
 
+    def test_on_a_machine_the_apps_connection_is_the_key(self):
+        gateway = lambda: "https://tt.example/api/machine/gateway/google-places/"
+        self.assertEqual(places.access({"MACHINE_TOKEN": "tok"}, granted=gateway),
+                         ("https://tt.example/api/machine/gateway/google-places/v1", {"X-Goog-Api-Key": "tok"}))
+        self.assertIsNone(places.access({"MACHINE_TOKEN": "tok"}, granted=lambda: None), "no grant is no access")
+        self.assertIsNone(places.access({}, granted=gateway), "off a machine the bridge is never asked")
+
+    def in_a_crawl(self, card):
+        """A working folder holding raw/site/crimp-tech.com/_index/business-card.json."""
+        app = tempfile.TemporaryDirectory()
+        self.addCleanup(app.cleanup)
+        index = os.path.join(app.name, "raw", "site", "crimp-tech.com", "_index")
+        os.makedirs(index)
+        if card is not None:
+            with open(os.path.join(index, "business-card.json"), "w") as f:
+                json.dump(card, f)
+        cwd = os.getcwd()
+        os.chdir(app.name)
+        self.addCleanup(os.chdir, cwd)
+        return app.name
+
+    def test_site_names_the_business_from_its_crawl_and_keeps_only_its_listing(self):
+        app = self.in_a_crawl({"name": "Crimp Tech", "address": {"locality": "Fort Myers", "region": "FL"}})
+        found = [{"id": "ChIJx"}, {"id": "ChIJy"}]
+        with mock.patch.object(places, "search", return_value=(found, None)) as search, \
+                mock.patch.object(places, "details", return_value=(DETAILS, None)):
+            code, printed, err = self.run_cli("--site", "https://www.crimp-tech.com")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(search.call_args[0][0], "Crimp Tech, Fort Myers, FL")
+        self.assertTrue(os.path.isfile(os.path.join(app, "raw", "places", "ChIJx.summary.json")))
+
+    def test_site_refuses_a_listing_for_another_site_and_writes_nothing(self):
+        app = self.in_a_crawl({"name": "Crimp Tech"})
+        other = dict(DETAILS, websiteUri="https://someone-else.com/")
+        with mock.patch.object(places, "search", return_value=([{"id": "ChIJx"}], None)), \
+                mock.patch.object(places, "details", return_value=(other, None)):
+            code, printed, err = self.run_cli("--site", "https://crimp-tech.com")
+        self.assertEqual((code, printed), (1, ""))
+        self.assertIn("(someone-else.com), not crimp-tech.com; nothing written", err)
+        self.assertIn("Try: tt-crawl places --place-id <theirs> --site https://crimp-tech.com", err)
+        self.assertFalse(os.path.exists(os.path.join(app, "raw", "places")))
+
+    def test_a_crawl_in_another_folder_names_the_business_from_there(self):
+        app = self.in_a_crawl(None)
+        index = os.path.join(app, "elsewhere", "_index")
+        os.makedirs(index)
+        with open(os.path.join(index, "business-card.json"), "w") as f:
+            json.dump({"name": "Crimp Tech"}, f)
+        self.assertEqual(places.business_of("https://crimp-tech.com", os.path.join(app, "elsewhere")), ("Crimp Tech", None))
+        self.assertIn("no crawl of crimp-tech.com", places.business_of("https://crimp-tech.com")[1])
+
+    def test_site_without_a_crawl_says_to_crawl_first(self):
+        self.in_a_crawl(None)
+        code, printed, err = self.run_cli("--site", "https://crimp-tech.com")
+        self.assertEqual((code, printed), (1, ""))
+        self.assertIn("no crawl of crimp-tech.com", err)
+        self.assertIn("Try: tt-crawl brand https://crimp-tech.com", err)
+
     def run_cli(self, *argv, env=None):
         out, err = StringIO(), StringIO()
         with redirect_stdout(out), redirect_stderr(err), mock.patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "k"} if env is None else env, clear=env is not None):
@@ -148,7 +206,7 @@ class PlacesTests(unittest.TestCase):
         two = [{"id": "ChIJa", "displayName": {"text": "A"}}, {"id": "ChIJb", "displayName": {"text": "B"}}]
         with mock.patch.object(places, "search", return_value=(two, None)):
             code, printed, err = self.run_cli("Crimp Tech, Fort Myers")
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 1)
         self.assertEqual(printed, "")
         self.assertIn("ChIJa", err)
         self.assertIn("ChIJb", err)
@@ -156,8 +214,9 @@ class PlacesTests(unittest.TestCase):
 
     def test_no_access_and_a_failed_call_are_refusals_on_stderr(self):
         code, printed, err = self.run_cli("Crimp Tech", env={})
-        self.assertEqual((code, printed), (2, ""))
+        self.assertEqual((code, printed), (1, ""))
         self.assertIn("no Google Places access", err)
+        self.assertIn("Try: python3 ~/tools/taskandtool.py request-connection google-places", err)
         with mock.patch.object(places, "search", return_value=([], "HTTP 403: denied")):
             code, printed, err = self.run_cli("Crimp Tech")
         self.assertEqual((code, printed), (1, ""))
@@ -177,7 +236,7 @@ class PlacesTests(unittest.TestCase):
 
     def test_a_refusal_under_json_is_json_on_stderr(self):
         code, printed, err = self.run_cli("Crimp Tech", "--json", env={})
-        self.assertEqual((code, printed), (2, ""))
+        self.assertEqual((code, printed), (1, ""))
         self.assertIn("GOOGLE_PLACES_API_KEY", json.loads(err)["try"])
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ class FakeDriver:
         if self.fail:
             raise cdp.CDPError("net::ERR_CONNECTION_REFUSED")
         self.calls.append(fn)
-        return {"strips": ["01.webp", "02.webp"], "page": "page.png", "overview": "overview.webp", "height": 3000, "truncated": False}
+        return {"strips": ["01.webp", "02.webp"], "page": "page.jpg", "overview": "overview.webp", "height": 3000, "truncated": False}
 
     def stop(self):
         self.stopped = True
@@ -54,18 +54,46 @@ class ShootTest(unittest.TestCase):
 
     def test_the_summary_says_where_to_look_and_what_next(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(), status=lambda u: 200)
-        _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)
+        _what, lines, nxt = shoot.report([("http://localhost:3000/", results)], False)
         text = "\n".join(lines + ["Next: " + nxt])
         self.assertIn("uploads/home-1280/overview.webp, then 01.webp … 02.webp", text)
-        self.assertIn("page.png is the whole page for people", text)
+        self.assertIn("page.jpg is the whole page to share", text)
         self.assertIn("Next: look at each overview", text)
 
     def test_a_failure_says_how_to_check_the_page_is_served(self):
         results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(fail=True), status=lambda u: 200)
-        _what, lines, nxt = shoot.report("http://localhost:3000/", results, False)
+        _what, lines, nxt = shoot.report([("http://localhost:3000/", results)], False)
         text = "\n".join(lines + [nxt])
         self.assertIn("failed", text)
         self.assertIn("curl", text)
+
+    def test_dev_not_answering_points_at_its_service(self):
+        results = shoot.shoot("http://localhost:3000/", [1280], "uploads", driver=FakeDriver(), status=lambda u: None)
+        self.assertIn("taskandtool.py logs", shoot.report([("http://localhost:3000/", results)], False)[2])
+
+    def test_a_path_is_dev_and_anything_else_is_refused(self):
+        self.assertEqual(shoot.page_url("/about"), "http://localhost:3000/about")
+        self.assertEqual(shoot.page_url("https://example.com/x"), "https://example.com/x")
+        self.assertIsNone(shoot.page_url("about"))
+
+    def test_several_pages_are_named_with_their_widths_beneath(self):
+        d = lambda: FakeDriver()
+        shots = [(u, shoot.shoot(u, [1280], "uploads", driver=d(), status=lambda _: 200))
+                 for u in ("http://localhost:3000/", "http://localhost:3000/about")]
+        what, lines, _ = shoot.report(shots, False)
+        self.assertEqual(what, "2 pages (whole page)")
+        self.assertEqual(lines[0], "http://localhost:3000/")
+        self.assertTrue(lines[1].startswith("  1280px: uploads/home-1280/"))
+        self.assertEqual(lines[2], "http://localhost:3000/about")
+
+    def test_the_sitemap_lists_its_pages_at_the_site_given(self):
+        xml = (b"<urlset><url><loc>https://acme.com/</loc></url><url><loc> https://acme.com/about </loc></url>"
+               b"<url><loc>https://acme.com/about</loc></url></urlset>")
+        got = shoot.sitemap_pages("http://localhost:3000/", fetch=lambda u, timeout: {"status": 200, "body": xml})
+        self.assertEqual(got, (["http://localhost:3000/", "http://localhost:3000/about"], None))
+        self.assertEqual(shoot.sitemap_pages("http://localhost:3000/", fetch=lambda u, timeout: {"status": 404, "body": b""}),
+                         (None, "http://localhost:3000/sitemap.xml answered 404"))
+        self.assertIn("lists no pages", shoot.sitemap_pages("http://localhost:3000/", fetch=lambda u, timeout: {"status": 200, "body": b"<urlset/>"})[1])
 
     def test_an_error_page_is_not_shot(self):
         d = FakeDriver()
@@ -108,7 +136,7 @@ class PageStatusTest(unittest.TestCase):
         results = shoot.shoot("https://a.example.com/admin", [1280], "uploads", driver=FakeDriver(),
                               status=lambda u: why)
         self.assertEqual(results[0][1]["error"], why)
-        self.assertIn("to see where it sends visitors", shoot.report("https://a.example.com/admin", results, False)[2])
+        self.assertIn("to see where it sends visitors", shoot.report([("https://a.example.com/admin", results)], False)[2])
 
     def test_www_and_the_bare_domain_are_one_site(self):
         self.fetching({"status": 200, "final_url": "https://example.com/about"})

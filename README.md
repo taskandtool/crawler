@@ -27,6 +27,8 @@ that fails, so a machine that cannot have Chrome still gets Obscura.
 
 ```
 tt-crawl brand URL         a business's own site: brand pictures, styles, screenshots, collections sampled
+                           (--places: also its own Google listing, as places --site does, as one line of the
+                           summary; the exit code stays the crawl's)
 tt-crawl survey URL        a big site sampled: every URL listed by template, two of each read, no pictures
 tt-crawl pages URL         a whole site for a rebuild: up to 1000 pages and every picture in their content
 tt-crawl reference URL     a site the owner admires: eight pages' screenshots, styles and structure, no pictures
@@ -35,8 +37,12 @@ tt-crawl import            with no --template: every post and page of a WordPres
                            --template T: that one collection, from the site's own feed or HTML
 tt-crawl docs              the documents the crawled pages link to, as markdown
 tt-crawl places "Name, City" --out raw/places
-                           the business's public Google listing (GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL for a proxy)
-tt-crawl shoot URL         one page's screenshots at desktop and phone width, whole or first screen (localhost too)
+                           the business's public Google listing (GOOGLE_PLACES_API_KEY, or on Task & Tool the
+                           app's google-places connection; GOOGLE_PLACES_API_URL for a proxy); --site URL names it
+                           from that site's crawl and keeps only a listing for that site
+tt-crawl shoot PAGE ...    pages' screenshots at desktop and phone width, whole or first screen; a path (/about) is
+                           this machine's dev server, --sitemap every page a sitemap lists; page.jpg is the whole
+                           page, small enough to share
 tt-crawl measure URL ...    what is wrong as a browser lays the pages out at 390, 900, 1280 and 1600: left edges that
                            differ, text under 14px, words against a panel's edge, sideways scrolling; no pictures
 tt-crawl sheet IMAGES…     several pictures as one numbered contact sheet, to name them in one look
@@ -75,8 +81,8 @@ in them always match it.
   to the file it names (`docs/_skipped.json`).
 - Exit 0 done; 1 failed, or something needs fixing (`check`, `audit`,
   `setup` without a browser); 2 refused or misused (a bad URL, flag or
-  date, a missing folder or inventory); 3 `places` matched several (each
-  named on stderr); 130 interrupted. `TTCRAWL_DEBUG=1` shows the traceback
+  date, a missing folder or inventory); 130 interrupted. `places` matching
+  several is 1, each named on stderr with its id. `TTCRAWL_DEBUG=1` shows the traceback
   of an unexpected failure.
 
 ## What a crawl writes
@@ -85,7 +91,7 @@ in them always match it.
 raw/site/<host>/            the site (www. dropped); raw/external/<host>/ for someone else's
   pages/<name>.md           one file per page: frontmatter, then the page's own text, verbatim
   images/                   each picture once, at its largest, under a readable name
-  shots/<name>/             with --screenshots: overview.webp (the whole page in one image a model reads, when it is taller than one strip and under about 10,000px), strips a model reads unscaled (2044px tall at desktop width, lossy WebP), page.png (the whole page, for people)
+  shots/<name>/             with --screenshots: overview.webp (the whole page in one image a model reads, when it is taller than one strip and under about 10,000px), strips a model reads unscaled (2044px tall at desktop width, lossy WebP), page.jpg (the whole page, for people, under 8 MB)
   structured/<name>.json    per-page JSON-LD, Open Graph, microdata, tracking IDs, embeds;
                             business.json merged from them
   docs/                     the linked documents as markdown (tt-crawl docs), originals in docs/_files/,

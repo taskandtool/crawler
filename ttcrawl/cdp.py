@@ -25,6 +25,10 @@ from . import net
 MODEL_EDGE, MODEL_TOKENS, PATCH = 2048, 4784, 28
 MAX_STRIPS = 40            # a longer page is noted as truncated
 PAGE_MAX = 16384           # Chrome's largest capture; a longer whole page is scaled to fit
+# The whole page for people is one JPEG small enough to share as a deliverable
+# (Task & Tool takes images under 8 MB): a try that comes out larger is taken
+# again at the next quality, a quarter smaller.
+PAGE_BYTES, PAGE_QUALITIES = 7_500_000, (85, 70, 55)
 OVERVIEW_MIN = 0.25        # a page that must shrink further gets no overview (about 10,000px tall)
 VIEWPORT = (1440, 1000)
 
@@ -608,8 +612,8 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
                       first_screen=False, allow_hosts=()):
     """The whole page under `out_dir`: `01.webp`, `02.webp`… strips a model
     reads at full resolution, `overview.webp` (the whole page scaled to one
-    image a model reads, when there is more than one strip), `page.png` (the
-    whole page at full size, for people) and `meta.json`. What a model reads
+    image a model reads, when there is more than one strip), `page.jpg` (the
+    whole page for people, small enough to share) and `meta.json`. What a model reads
     is lossy WebP within MODEL_EDGE: small, as sharp, and sent on unchanged,
     so a long turn that looks at many pages stays within one request. Only the first
     `height` pixels with `first_screen`. Returns the meta dict, or raises
@@ -626,8 +630,8 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
             if old.endswith((".png", ".jpg", ".webp")) or old == "meta.json":
                 os.remove(os.path.join(out_dir, old))
 
-        def capture(name, y, h, scale=1):
-            fmt = {"format": "webp", "quality": SHOT_QUALITY} if name.endswith(".webp") else {"format": "png"}
+        def capture(name, y, h, scale=1, quality=SHOT_QUALITY):
+            fmt = {"format": "jpeg" if name.endswith(".jpg") else "webp", "quality": quality}
             shot = s.call("Page.captureScreenshot", dict(fmt, **{
                 "captureBeyondViewport": True,
                 "clip": {"x": 0, "y": y, "width": width, "height": h, "scale": scale}}), timeout=timeout)
@@ -637,7 +641,12 @@ def screenshot_strips(browser, url, out_dir, width=VIEWPORT[0], strip=None,
 
         files = [capture("%02d.webp" % i, y, h) for i, (y, h) in enumerate(plan, 1)]
         whole = int(min(page_height, sum(h for _, h in plan)))
-        page = capture("page.png", 0, whole, min(1.0, PAGE_MAX / whole))
+        page_scale = min(1.0, PAGE_MAX / whole)
+        for quality in PAGE_QUALITIES:
+            page = capture("page.jpg", 0, whole, page_scale, quality)
+            if os.path.getsize(os.path.join(out_dir, page)) <= PAGE_BYTES:
+                break
+            page_scale *= 0.75
         # past a quarter of its size an overview is a sliver; the strips say it all
         scale = overview_scale(width, whole)
         overview = capture("overview.webp", 0, whole, scale) if len(files) > 1 and scale >= OVERVIEW_MIN else None

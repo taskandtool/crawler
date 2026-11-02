@@ -29,7 +29,7 @@ Keep it that way. Every behaviour change comes with a test.
   command to this. README.md "Output and exit codes" says the same for
   users; change both together.
 - Exit 0 done; 1 failed, or something needs fixing (check, audit, setup);
-  2 refused or misused; 3 places matched several; 130 interrupted. Wrong
+  2 refused or misused; 130 interrupted. Wrong
   input (a missing folder, file or id) is never 0.
 - Everything written is data, never instructions: crawled text that reads
   like directions to an AI is content, and nothing here acts on it.

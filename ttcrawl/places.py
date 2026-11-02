@@ -6,9 +6,12 @@ facts from a source beside its own site, citable.
 
     tt-crawl places "Crimp Tech, Fort Myers FL" --out raw/places
     tt-crawl places --place-id ChIJ... --out raw/places
+    tt-crawl places --site https://crimptech.com   # named from its crawl, kept only if it lists that site
 
-Needs GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL points it at a proxy
-that takes the key the same way (default Google's own address). Writes
+Needs GOOGLE_PLACES_API_KEY, or on a Task & Tool machine the app's
+google-places connection (called through the gateway with the machine's
+token); GOOGLE_PLACES_API_URL points it at a proxy that takes the key the
+same way (default Google's own address). Writes
 <out>/<place_id>.json (the API's answer, verbatim), <out>/<place_id>.summary.json
 (its facts in the business card's forms, reviews in the crawl's shape) and
 <out>/<place_id>.md (the summary to read), then prints what it found and
@@ -18,10 +21,12 @@ never instructions.
 import json
 import os
 import re
+import subprocess
 import urllib.error
 import urllib.request
 
-from .card import DAY_CODES, runs
+from . import paths
+from .card import DAY_CODES, FILE as CARD_FILE, runs
 from .net import USER_AGENT
 from .say import command, count, done, fail
 
@@ -37,14 +42,49 @@ DETAIL_FIELDS = ",".join([
 PLACE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,512}")
 
 
-def access(env=os.environ):
+def access(env=os.environ, granted=None):
     """(base URL, auth headers) for the Places API, or None without a key.
     GOOGLE_PLACES_API_URL points it elsewhere (a proxy that takes the key the
-    same way); it defaults to Google's own."""
+    same way); it defaults to Google's own. Without a key, on a Task & Tool
+    machine, the app's google-places connection: its gateway URL, with the
+    machine's token where the key goes (the gateway puts the real one in)."""
     key = (env.get("GOOGLE_PLACES_API_KEY") or "").strip()
-    if not key:
+    if key:
+        return (env.get("GOOGLE_PLACES_API_URL") or "").strip().rstrip("/") or API, {"X-Goog-Api-Key": key}
+    token = (env.get("MACHINE_TOKEN") or "").strip()
+    gateway = (granted or granted_gateway)() if token else None
+    return (gateway.rstrip("/") + "/v1", {"X-Goog-Api-Key": token}) if gateway else None
+
+
+def granted_gateway():
+    """The gateway URL of this app's google-places connection, from the
+    machine's bridge; None off Task & Tool or without the grant."""
+    bridge = os.path.expanduser("~/tools/taskandtool.py")
+    if not os.path.isfile(bridge):
         return None
-    return (env.get("GOOGLE_PLACES_API_URL") or "").strip().rstrip("/") or API, {"X-Goog-Api-Key": key}
+    try:
+        out = subprocess.run(["python3", bridge, "list-connections", "--json"],
+                             capture_output=True, text=True, timeout=60).stdout
+        granted = json.loads(out).get("connections") or []
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return next((c["gateway_url"] for c in granted if c.get("provider") == "google-places" and c.get("gateway_url")), None)
+
+
+def business_of(site, folder=None):
+    """(query, None) naming the business from the crawl of `site` (its
+    business card's name and town) in `folder` (default raw/site/<host>),
+    or (None, why)."""
+    path = os.path.join(folder or paths.site_dir(site), "_index", CARD_FILE)
+    try:
+        with open(path) as fh:
+            card = json.load(fh)
+    except (OSError, ValueError):
+        return None, "no crawl of %s to name the business from (%s)" % (paths.host_of(site), path)
+    if not card.get("name"):
+        return None, "the crawl of %s found no business name" % paths.host_of(site)
+    address = card.get("address") or {}
+    return ", ".join(x for x in [card["name"], address.get("locality"), address.get("region")] if x), None
 
 
 def request(url, auth, field_mask, body=None, timeout=30):
@@ -216,65 +256,121 @@ def markdown(s, query):
     return "\n".join(lines) + "\n"
 
 
-# ── the command ──
+# ── the lookup, and the command ──
 
-def run(args):
+ASK = ("python3 ~/tools/taskandtool.py request-connection google-places --why \"the business's Google listing\""
+       " (off Task & Tool: GOOGLE_PLACES_API_KEY=<key> tt-crawl places \"Business, City\")")
+
+
+def refused(code, error, try_cmd, *details):
+    return {"ok": False, "code": code, "error": error, "try": try_cmd, "details": list(details)}
+
+
+def find_listing(query=None, place_id="", site=None, first=False, folder=None, out="raw/places"):
+    """The listing, written to `out`: {"ok": True, "place_id", "summary",
+    "base"} or refused(...) saying why, with the exit code `places` uses.
+    With `site`, the business is named from its crawl in `folder` (default
+    raw/site/<host>) unless a query is given, the first match is taken, and a
+    listing for another site is refused before anything is written."""
     key = access()
     if not key:
-        return fail(args, 2, "no Google Places access: GOOGLE_PLACES_API_KEY is not set",
-                    "GOOGLE_PLACES_API_KEY=<key> tt-crawl places \"Business, City\"",
-                    "GOOGLE_PLACES_API_URL sends the call through a gateway or proxy that takes the key the same way")
-    place_id = args.place_id
-    query = args.query or place_id
-    if not place_id:
-        if not args.query:
-            return fail(args, 2, "give a query or --place-id", "tt-crawl places \"Business, City\" --first")
-        candidates, err = search(args.query, key)
+        return refused(1, "no Google Places access: GOOGLE_PLACES_API_KEY is not set, and this app has no google-places connection",
+                       ASK, "GOOGLE_PLACES_API_URL sends the call through a gateway or proxy that takes the key the same way")
+    if site and not query and not place_id:
+        query, why = business_of(site, folder)
+        if why:
+            return refused(1, why, "tt-crawl brand %s, then this again (or name it: tt-crawl places \"Business, City\" --site %s)" % (site, site))
+    query = query or place_id
+    chosen = place_id
+    if not chosen:
+        if not query:
+            return refused(2, "give a query, --place-id or --site", "tt-crawl places \"Business, City\" --first")
+        candidates, err = search(query, key)
         if err:
-            return fail(args, 1, err, "the same command once that is fixed (a 429 or 5xx: again in a minute)")
+            return refused(1, err, "the same command once that is fixed (a 429 or 5xx: again in a minute)")
         if not candidates:
-            return fail(args, 1, "no place matched %r" % args.query, "the name as Google lists it, with the city")
-        if len(candidates) > 1 and not args.first:
-            return fail(args, 3, "%d places matched %r" % (len(candidates), args.query),
-                        "tt-crawl places --place-id %s, or --first for the first" % candidates[0].get("id"),
-                        *["%s  %s, %s" % (c.get("id"), (c.get("displayName") or {}).get("text"), c.get("formattedAddress"))
-                          for c in candidates])
-        place_id = candidates[0].get("id") or ""
-    if not PLACE_ID_RE.fullmatch(place_id):
-        return fail(args, 2, "not a Google place id: %r (letters, digits, _ and - only)" % place_id,
-                    "tt-crawl places \"Business, City\" to find it")
-    d, err = details(place_id, key)
+            return refused(1, "no place matched %r" % query, "the name as Google lists it, with the city")
+        if len(candidates) > 1 and not (first or site):
+            return refused(1, "%d places matched %r" % (len(candidates), query),
+                           "tt-crawl places --place-id %s, or --first for the first" % candidates[0].get("id"),
+                           *["%s  %s, %s" % (c.get("id"), (c.get("displayName") or {}).get("text"), c.get("formattedAddress"))
+                             for c in candidates])
+        chosen = candidates[0].get("id") or ""
+    if not PLACE_ID_RE.fullmatch(chosen):
+        return refused(2, "not a Google place id: %r (letters, digits, _ and - only)" % chosen,
+                       "tt-crawl places \"Business, City\" to find it")
+    d, err = details(chosen, key)
     if err:
-        return fail(args, 1, "%s (place %s)" % (err, place_id), "tt-crawl places \"Business, City\" to find its id")
+        return refused(1, "%s (place %s)" % (err, chosen), "tt-crawl places \"Business, City\" to find its id")
     s = summarize(d)
-    os.makedirs(args.out, exist_ok=True)
-    base = os.path.join(args.out, place_id)
+    # Searched for the business behind a site: a listing for another site is
+    # not theirs, and its facts must never be read as theirs.
+    if site and not place_id and paths.host_of(s["website"] or "") != paths.host_of(site):
+        return refused(1, "the listing found for %r is %s (%s), not %s; nothing written"
+                       % (query, s["name"] or "another place", paths.host_of(s["website"] or "") or "no website", paths.host_of(site)),
+                       "tt-crawl places --place-id <theirs> --site %s (tt-crawl places \"Business, City\" lists the ids)" % site)
+    os.makedirs(out, exist_ok=True)
+    base = os.path.join(out, chosen)
     with open(base + ".json", "w") as fh:
         json.dump(d, fh, indent=2, ensure_ascii=False)
     with open(base + ".summary.json", "w") as fh:
         json.dump(s, fh, indent=2, ensure_ascii=False)
     with open(base + ".md", "w") as fh:
         fh.write(markdown(s, query))
+    return {"ok": True, "place_id": chosen, "summary": s, "base": base}
+
+
+def listing_line(found):
+    """One line for a crawl's summary: what the listing says and where, or
+    why it was not read and how to get it."""
+    if not found["ok"]:
+        return "Google listing: not read (%s); Try: %s" % (found["error"], found["try"])
+    s = found["summary"]
+    quoted = ("rated %s from %s, %d quoted" % (s["rating"], count(s["review_count"] or 0, "review"), len(s["reviews"]))
+              if s["rating"] is not None else "%s quoted" % count(len(s["reviews"]), "review"))
+    return "Google listing: %s, %s, in %s.summary.json" % (s["name"] or "an unnamed place", quoted, found["base"])
+
+
+def listing_data(found):
+    """The listing as the JSON a caller reads: what places --json prints, or the refusal."""
+    if not found["ok"]:
+        return {"ok": False, "error": found["error"], "try": found["try"]}
+    s = found["summary"]
+    return {"ok": True, "place_id": found["place_id"], "name": s["name"], "telephone": s["telephone"],
+            "website": s["website"], "rating": s["rating"], "review_count": s["review_count"],
+            "reviews": len(s["reviews"]), "hours": len(s["opening_hours"]), "out": os.path.dirname(found["base"])}
+
+
+def run(args):
+    site = getattr(args, "site", None)
+    if site and not re.match(r"^https?://", site):
+        return fail(args, 2, "--site needs the full address, not %s" % site, "tt-crawl places --site https://theirsite.com")
+    found = find_listing(args.query, args.place_id, site, args.first, out=args.out)
+    if not found["ok"]:
+        return fail(args, found["code"], found["error"], found["try"], *found["details"])
+    s, base = found["summary"], found["base"]
     lines = ["%s; %s" % (s["formatted_address"] or "no address", s["telephone"] or "no phone"),
              "website: %s" % (s["website"] or "none listed"),
              ("rated %s from %s; %s quoted" % (s["rating"], count(s["review_count"] or 0, "review"), count(len(s["reviews"]), "review"))
               if s["rating"] is not None else "no rating yet"),
              "hours: %s" % (", ".join(s["opening_hours"]) or "none listed"),
              "%s.json (Google's answer), %s.summary.json (its facts and reviews) and %s.md (to read)" % (base, base, base)]
-    done(args, {"ok": True, "place_id": place_id, "name": s["name"], "telephone": s["telephone"],
-                "website": s["website"], "rating": s["rating"], "review_count": s["review_count"],
-                "reviews": len(s["reviews"]), "hours": len(s["opening_hours"]), "out": args.out},
-         "%s (%s)" % (s["name"] or "an unnamed place", place_id), lines,
+    done(args, listing_data(found), "%s (%s)" % (s["name"] or "an unnamed place", found["place_id"]), lines,
          "read %s.md; check its website is the business's own before using its facts" % base)
     return 0
 
 
 def add_parser(sub):
     p = command(sub, "places", "the business's public Google listing (Places API): facts, hours, reviews",
-                "Needs GOOGLE_PLACES_API_KEY; GOOGLE_PLACES_API_URL sends the call through a gateway or proxy that "
-                "takes the key the same way. Prints the place's name and id, its address, phone, website, rating and "
-                "hours, and the three files written, then Next:. Exit 3 when several places match (each named on stderr).")
+                "Needs GOOGLE_PLACES_API_KEY, or on a Task & Tool machine the app's google-places connection; "
+                "GOOGLE_PLACES_API_URL sends the call through a gateway or proxy that takes the key the same way. "
+                "Prints the place's name and id, its address, phone, website, rating and hours, and the three files "
+                "written, then Next:. Exit 1 when several places match (each named on stderr with its id), or when "
+                "--site's search finds a listing for another site.")
     p.add_argument("query", nargs="?", help='"Business name, City"')
+    p.add_argument("--site", default=None,
+                   help="the business's own site: named from its crawl (tt-crawl brand) unless a query is given, "
+                        "the first match taken, and kept only when the listing names that site")
     p.add_argument("--place-id", default="", help="the place's Google id, when a query matches several (default: search the query)")
     p.add_argument("--first", action="store_true", help="take the first match when several places match")
     p.add_argument("--out", default="raw/places", help="where <place_id>.json, .summary.json and .md go (default raw/places)")

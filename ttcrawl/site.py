@@ -704,6 +704,12 @@ class Crawl:
             summary["import"] = self.import_stats
         if args.styles and not self.style_readings:
             summary["styles_skipped"] = "no page rendered in the browser"
+        # brand --places: the business's own listing, named from the card just
+        # written. An extra, so its outcome is a line here, never the exit code.
+        if getattr(args, "places", False):
+            from . import places
+            self.listing = places.find_listing(site=self.start, folder=out)
+            summary["places"] = places.listing_data(self.listing)
         self.written = set(written)
         done(args, summary, *self.report(summary, skipped_by))
         return 0
@@ -756,6 +762,9 @@ class Crawl:
             left.append("%s with little text, kept and marked thin" % count(s["thin"], "page"))
         if left:
             lines.append("left alone: " + "; ".join(left))
+        if getattr(self, "listing", None):
+            from . import places
+            lines.append(places.listing_line(self.listing))
         lines.append("%s%s%s" % (
             "rendered by %s (%d of %d pages)" % (s["renderer"], s["rendered"], s["pages"]) if s["renderer"] else "read without a browser",
             "; " + s["browser_note"] if s.get("browser_note") else "",
@@ -1098,6 +1107,9 @@ def add_parser(sub):
 
     p = say_command(sub, "brand", "a business's own site for its facts, voice and look (tt-crawl playbook brand)", CRAWL_OUTPUT)
     _crawl_args(p, DEFAULT_MAX_PAGES, "brand")
+    p.add_argument("--places", action="store_true",
+                   help="also the business's own Google listing into raw/places/ (as tt-crawl places --site): "
+                        "one line in the summary, and `places` under --json; the exit code stays the crawl's")
     p.set_defaults(func=run, profile="brand", per_template=2, per_section=6, styles=True, screenshots=True,
                    screenshot_pages=BRAND_SHOT_PAGES)
 
