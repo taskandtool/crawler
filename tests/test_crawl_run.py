@@ -7,6 +7,8 @@ import socket
 import struct
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -707,6 +709,53 @@ class CDPTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     chrome.install_chrome(log=lambda m: None)
             self.assertFalse(os.path.lexists(os.path.join(home, "bin", "chrome-headless-shell")))
+
+    def _apt(self, refuses):
+        ran = []
+
+        def run(cmd, **kwargs):
+            pkgs = cmd[cmd.index("--no-install-recommends") + 1:] if "--no-install-recommends" in cmd else None
+            if pkgs:
+                ran.append(pkgs)
+            return mock.Mock(returncode=1 if pkgs and set(pkgs) & refuses else 0)
+
+        return ran, run
+
+    def test_apt_installs_everything_in_one_command(self):
+        ran, run = self._apt(refuses=set())
+        with mock.patch.object(chrome.subprocess, "run", run), mock.patch.object(chrome.shutil, "which", lambda n: "/x"), \
+                mock.patch.object(chrome.os, "geteuid", lambda: 0):
+            self.assertEqual(chrome.apt_install([["a"], ["b", "b-old"]], log=lambda m: None), [])
+        self.assertEqual(ran, [["a", "b"]])
+
+    def test_apt_goes_one_by_one_when_a_name_is_refused(self):
+        ran, run = self._apt(refuses={"b", "c"})
+        with mock.patch.object(chrome.subprocess, "run", run), mock.patch.object(chrome.shutil, "which", lambda n: "/x"), \
+                mock.patch.object(chrome.os, "geteuid", lambda: 0):
+            failed = chrome.apt_install([["a"], ["b", "b-old"], ["c"]], log=lambda m: None)
+        self.assertEqual(ran, [["a", "b", "c"], ["a"], ["b"], ["b-old"], ["c"]])
+        self.assertEqual(failed, ["c"])
+
+    def test_a_second_chrome_install_waits_for_the_first(self):
+        order = []
+        started = threading.Event()
+
+        def slow(log):
+            order.append("first in")
+            started.set()
+            time.sleep(0.2)
+            order.append("first out")
+
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.multiple(chrome, can_install_chrome=lambda: True, SHARE=home):
+                with mock.patch.object(chrome, "_install_chrome", slow):
+                    first = threading.Thread(target=chrome.install_chrome)
+                    first.start()
+                    started.wait(5)
+                with mock.patch.object(chrome, "_install_chrome", lambda log: order.append("second")):
+                    chrome.install_chrome()
+                first.join()
+        self.assertEqual(order, ["first in", "first out", "second"])
 
     def test_free_port_is_loopback(self):
         port = cdp.free_port()

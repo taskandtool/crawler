@@ -13,6 +13,8 @@ libraries and basic fonts it needs through apt when they are missing, and
 links it into ~/.local/bin; it installs Obscura's release build the same
 way and puts a `tt-crawl` launcher on the PATH. Nothing here needs a key or reaches a provider.
 """
+import contextlib
+import fcntl
 import io
 import json
 import os
@@ -103,12 +105,21 @@ def apt_install(choices, log=print):
         return [c[0] for c in choices]
     sudo = [] if os.geteuid() == 0 else ["sudo", "-n"]
     subprocess.run(sudo + ["apt-get", "update", "-qq"], capture_output=True, timeout=600)
+
+    def install(*pkgs):
+        return subprocess.run(sudo + ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq",
+                              "--no-install-recommends", *pkgs], capture_output=True, timeout=900).returncode == 0
+
+    # All at once is 14s where one command per package is 88s; a name this
+    # release does not have fails the whole command, so that case goes one by one.
+    firsts = [options[0] for options in choices]
+    if install(*firsts):
+        log("  installed %s" % ", ".join(firsts))
+        return []
     failed = []
     for options in choices:
         for pkg in options:
-            r = subprocess.run(sudo + ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq",
-                               "--no-install-recommends", pkg], capture_output=True, timeout=900)
-            if r.returncode == 0:
+            if install(pkg):
                 log("  installed %s" % pkg)
                 break
         else:
@@ -122,6 +133,16 @@ def _download(url, timeout=600):
         return r.read()
 
 
+@contextlib.contextmanager
+def _install_lock():
+    """One Chrome install at a time on a machine: a crawl that finds none
+    while `tt-crawl setup` is running waits for it, then finds it done."""
+    os.makedirs(SHARE, exist_ok=True)
+    with open(os.path.join(SHARE, "install.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def install_chrome(log=print):
     """chrome-headless-shell, current stable, into ~/.local/share/tt-crawl,
     linked as ~/.local/bin/chrome-headless-shell; its libraries and fonts
@@ -129,6 +150,11 @@ def install_chrome(log=print):
     if not can_install_chrome():
         raise RuntimeError("Chrome for Testing has Linux builds for x86-64 only; this is %s %s"
                            % (sys.platform, platform.machine()))
+    with _install_lock():
+        return _install_chrome(log)
+
+
+def _install_chrome(log):
     channels = json.loads(_download(CFT_JSON, timeout=60))["channels"]["Stable"]
     version = channels["version"]
     url = next(d["url"] for d in channels["downloads"]["chrome-headless-shell"] if d["platform"] == "linux64")
