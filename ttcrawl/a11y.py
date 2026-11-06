@@ -116,6 +116,6 @@ def findings(html, title="", description=""):
         out.append(f"duplicate id(s): {', '.join(sorted(dupes)[:5])}")
     if title and len(title) > 60:
         out.append(f"title is {len(title)} characters (keep it under 60)")
-    if description and (len(description) < 70 or len(description) > 160):
-        out.append(f"meta description is {len(description)} characters (70 to 160 reads as a snippet)")
+    if description and len(description) > 160:
+        out.append(f"meta description is {len(description)} characters (search results cut it near 160)")
     return out

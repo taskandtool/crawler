@@ -33,7 +33,11 @@ class A11yTests(unittest.TestCase):
         self.assertIn("2 form field(s) without a label", f)
         self.assertIn("duplicate id(s): dup", f)
         self.assertTrue(any(x.startswith("title is 7") for x in f))
-        self.assertTrue(any(x.startswith("meta description is 6 characters") for x in f))
+        self.assertFalse(any(x.startswith("meta description") for x in f), "a short description is fine")
+
+    def test_a_long_description_is_a_finding(self):
+        f = a11y.findings("<html></html>", "Title", "x" * 161)
+        self.assertIn("meta description is 161 characters (search results cut it near 160)", f)
 
     def test_unparseable_html_is_one_finding(self):
         self.assertEqual(a11y.findings(None), ["HTML could not be parsed"])
